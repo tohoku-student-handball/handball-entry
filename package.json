@@ -1,0 +1,27 @@
+{
+  "name": "handball-entry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "全日本学生ハンドボール選手権大会 ワンストップ申込システム",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "preview:build": "node scripts/build-preview.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "4.0.8"
+  }
+}
