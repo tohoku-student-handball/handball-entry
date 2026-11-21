@@ -2,9 +2,10 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import type { Team } from "@/lib/types";
-import { validateTeam } from "@/lib/validation";
+import { lockReason, validateTeam } from "@/lib/validation";
 import { Field } from "./Field";
 import { go } from "./router";
+import { ActionButton, LockBanner } from "./ui";
 
 /** T-1 基本情報・登録番号・引率責任者 */
 export function TeamInfoForm({ team }: { team: Team }) {
@@ -15,19 +16,17 @@ export function TeamInfoForm({ team }: { team: Team }) {
   const set = <K extends keyof Team>(k: K, v: Team[K]) => setT({ ...t, [k]: v });
   const setEscort = (patch: Partial<Team["escort"]>) => setT({ ...t, escort: { ...t.escort, ...patch } });
 
-  function save() {
-    store.saveTeam(t);
+  const locked = lockReason(team, store.settings());
+
+  async function save() {
+    await store.saveTeam(t);
     go(t.gender);
   }
 
   return (
-    <form
-      className="stack"
-      onSubmit={(e) => {
-        e.preventDefault();
-        save();
-      }}
-    >
+    <form className="stack" onSubmit={(e) => e.preventDefault()}>
+      <LockBanner reason={locked} />
+      <fieldset className="plain stack" disabled={!!locked}>
       <section className="card">
         <h3>チームの表記</h3>
         <Field label="パンフレットに載せるチーム名" required hint="通常は大学名のままで構いません。">
@@ -82,13 +81,16 @@ export function TeamInfoForm({ team }: { team: Team }) {
         </label>
       </section>
 
+      </fieldset>
       <div className="actions">
         <button type="button" className="btn" onClick={() => go(t.gender)}>
-          保存せずに戻る
+          {locked ? "戻る" : "保存せずに戻る"}
         </button>
-        <button type="submit" className="btn primary">
-          保存する
-        </button>
+        {!locked && (
+          <ActionButton type="submit" onClick={save} busyLabel="保存中…">
+            保存する
+          </ActionButton>
+        )}
       </div>
     </form>
   );

@@ -1,7 +1,8 @@
 // 申込内容のルール判定。画面にもデータベースにも依存しない純粋な関数だけを置きます。
 // level: "error" は提出できない不備、"warning" は注意（提出は可能）。
 
-import type { Member, Team, TournamentSettings } from "./types";
+import type { Member, Team, TeamAsset, TournamentSettings, Uniform } from "./types";
+import { ASSET_LABEL } from "./types";
 
 export type IssueLevel = "error" | "warning";
 export interface Issue {
@@ -172,4 +173,57 @@ export function feeSummary(members: Member[], s: TournamentSettings) {
     entryFee: s.fees.entry,
     total: s.fees.entry + insured * s.fees.insurancePerPerson,
   };
+}
+
+/** ユニフォームのチェック：CP用・GK用それぞれ濃色と淡色が1着以上 */
+export function validateUniforms(uniforms: Uniform[]): Issue[] {
+  const issues: Issue[] = [];
+  for (const use of ["CP", "GK"] as const) {
+    const list = uniforms.filter((u) => u.use === use);
+    const label = use === "CP" ? "CP（コートプレーヤー）用" : "GK（ゴールキーパー）用";
+    if (!list.some((u) => u.tone === "dark")) issues.push({ level: "error", field: "uniform", message: `${label}の濃い色のユニフォームを登録してください。` });
+    if (!list.some((u) => u.tone === "light")) issues.push({ level: "error", field: "uniform", message: `${label}の淡い色のユニフォームを登録してください。` });
+    if (list.some((u) => !u.color.trim())) issues.push({ level: "error", field: "uniform", message: `${label}のユニフォームに、色の名前が入っていないものがあります。` });
+  }
+  return issues;
+}
+
+/** 集合写真・ロゴのチェック */
+export function validateAssets(assets: TeamAsset[]): Issue[] {
+  return (["group", "logo"] as const)
+    .filter((k) => !assets.some((a) => a.kind === k))
+    .map((k) => ({ level: "error" as const, field: "asset", message: `${ASSET_LABEL[k]}をアップロードしてください。` }));
+}
+
+/** 提出前の全項目チェック */
+export function validateSubmission(
+  team: Team,
+  members: Member[],
+  uniforms: Uniform[],
+  assets: TeamAsset[],
+  s: TournamentSettings,
+): Issue[] {
+  return [...validateTeam(team, members, s), ...validateUniforms(uniforms), ...validateAssets(assets)];
+}
+
+/** 協賛企業名入りユニフォームの着種数と現地払いの金額 */
+export function sponsorFee(uniforms: Uniform[], s: TournamentSettings) {
+  const count = uniforms.filter((u) => u.sponsor).length;
+  return { count, amount: count * s.fees.sponsorUniform };
+}
+
+/** チームが今、名簿などを変更できるか（データベースの team_is_editable と同じ判定） */
+export function isEditable(team: Team, s: TournamentSettings, now: Date = new Date()): boolean {
+  if (!["not_started", "in_progress", "returned"].includes(team.status)) return false;
+  if (now.getTime() <= new Date(s.entryDeadlineAt).getTime()) return true;
+  return !!team.unlockedUntil && now.getTime() <= new Date(team.unlockedUntil).getTime();
+}
+
+/** 変更できない理由（画面に表示する） */
+export function lockReason(team: Team, s: TournamentSettings, now: Date = new Date()): string | null {
+  if (isEditable(team, s, now)) return null;
+  if (team.status === "submitted") return "提出済みのため、地区学連の確認が終わるまで変更できません。直す必要がある場合は地区学連にご連絡ください。";
+  if (team.status === "region_approved" || team.status === "office_confirmed")
+    return "承認済みのため変更できません。変更が必要な場合は大会事務局にご連絡ください。";
+  return "申込締切を過ぎたため変更できません。変更が必要な場合は大会事務局にご連絡ください。";
 }

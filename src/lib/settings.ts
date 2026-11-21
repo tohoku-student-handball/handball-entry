@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS: TournamentSettings = {
   name: "令和9年度 全日本学生ハンドボール選手権大会",
   startDate: "2027-11-06",
   entryDeadline: "2027-10-01",
+  entryDeadlineAt: "2027-10-01T23:59:59+09:00",
   limits: {
     staffMax: 6,
     playerEntryMax: 25,

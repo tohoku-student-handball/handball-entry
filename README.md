@@ -13,6 +13,8 @@
 | [05_実装計画](docs/05_実装計画.md) | M1〜M5 の段階と時期（承認済み） |
 | [06_M1_動作確認手順](docs/06_M1_動作確認手順.md) | 試作品の確認のしかた |
 | [07_アカウント準備手順](docs/07_アカウント準備手順.md) | GitHub・Supabase・Vercel・Gmailの準備と引き継ぎ |
+| [08_M2_本番環境の設定手順](docs/08_M2_本番環境の設定手順.md) | データベースの準備・メール設定・Vercelでの公開 |
+| [09_M2_動作確認手順](docs/09_M2_動作確認手順.md) | M2（提出・承認・差し戻し・ロック・申込書）の確認のしかた |
 
 ## 開発（エンジニア向け）
 
@@ -21,5 +23,15 @@ npm install
 npm run dev            # 開発用に起動（http://localhost:3000）
 npm test               # ルール判定・写真検査の自動テスト
 npm run build          # 本番用に書き出し（out/）
-npm run preview:build  # 試作品を1つのHTMLにまとめる（preview/index.html）
+npm run preview:build  # デモ版を1つのHTMLにまとめる（preview/index.html）
+# データベースの権限テスト（手元の PostgreSQL 16 が必要）
+PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash supabase/tests/run.sh
 ```
+
+| フォルダ | 内容 |
+|---|---|
+| `src/lib/` | ルール判定・写真検査・データの窓口（デモ版／Supabase版） |
+| `src/components/` | 画面 |
+| `supabase/migrations/` | データベースの設計（表・権限・提出/承認の関数） |
+| `supabase/seed_r9.sql` | 令和9年度大会の初期データ |
+| `supabase/tests/` | データベースの権限テスト |

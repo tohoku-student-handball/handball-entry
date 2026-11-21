@@ -1,161 +1,180 @@
 "use client";
-// データの保存先。
-// M1試作品：ブラウザ内（データ＝localStorage、写真＝IndexedDB）に保存する「お試し用」。
-// M2以降：同じ DataStore の形のまま、Supabase に保存する実装に差し替える。
+// データの保存先の「窓口」。画面はこの DataStore だけを使います。
+//   デモ版（demoStore.ts）：ブラウザの中だけに保存。試作品・説明用。
+//   本番（liveStore.ts）  ：Supabase に保存。
+// 読み出しはすぐに返り（手元に持っている写しから）、書き込みは Promise で返ります。
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { DEFAULT_SETTINGS } from "./settings";
-import type { Gender, Member, Region, Team, TournamentSettings, University } from "./types";
-import { emptyMember } from "./types";
+import type {
+  AssetKind,
+  Gender,
+  Member,
+  Membership,
+  Region,
+  ReviewComment,
+  Role,
+  Team,
+  TeamAsset,
+  TournamentSettings,
+  TournamentUniversity,
+  Uniform,
+  University,
+} from "./types";
 
-export interface DataStore {
-  settings(): TournamentSettings;
-  university(): University;
-  region(id: string): Region | undefined;
-  teams(): Team[];
-  team(id: string): Team | undefined;
-  createTeam(gender: Gender): Team;
-  saveTeam(team: Team): void;
-  members(teamId: string): Member[];
-  member(id: string): Member | undefined;
-  saveMember(member: Member): Member;
-  deleteMember(id: string): Promise<void>;
-  putPhoto(blob: Blob): Promise<string>;
-  getPhoto(key: string): Promise<Blob | undefined>;
-  reset(): Promise<void>;
-}
-
-interface Snapshot {
-  version: 1;
-  university: University;
+export interface Snapshot {
+  tournamentId: string;
+  settings: TournamentSettings;
+  email: string;
+  /** 自分の所属 */
+  myMemberships: Membership[];
+  /** 事務局のみ：全員の所属 */
+  allMemberships: Membership[];
   regions: Region[];
+  universities: University[];
+  tournamentUniversities: TournamentUniversity[];
   teams: Team[];
   members: Member[];
+  uniforms: Uniform[];
+  assets: TeamAsset[];
+  comments: ReviewComment[];
 }
 
-const LS_KEY = "handball-entry-demo-v1";
-const DB_NAME = "handball-entry-demo-photos";
-
-function now() {
-  return new Date().toISOString();
-}
-function newId() {
-  return crypto.randomUUID();
-}
-
-function seed(): Snapshot {
-  const t = now();
-  const teamId = newId();
-  const staffId = newId();
-  const players: Partial<Member>[] = [
-    { name: "東北 一郎", kana: "とうほく いちろう", number: 1, position: "GK", grade: 4, faculty: "教育学部", highSchool: "宮城県立青葉高校", heightCm: 185, weightKg: 82, handedness: "右", birthDate: "2005-06-12", bench: true },
-    { name: "仙台 健太", kana: "せんだい けんた", number: 7, position: "CB", grade: 3, faculty: "経済学部", highSchool: "仙台市立杜の都高校", heightCm: 178, weightKg: 74, handedness: "右", birthDate: "2006-02-03", bench: true },
-    { name: "青葉 翔", kana: "あおば しょう", number: 10, position: "LB", grade: 2, faculty: "スポーツ科学部", highSchool: "山形県立最上高校", heightCm: 188, weightKg: 85, handedness: "右", birthDate: "2007-09-20", bench: true },
-    { name: "広瀬 蓮", kana: "ひろせ れん", number: 11, position: "RW", grade: 1, faculty: "工学部", highSchool: "福島県立阿武隈高校", heightCm: 172, weightKg: 66, handedness: "左", birthDate: "2009-12-24", bench: false },
-  ];
-  const members: Member[] = [
-    { ...emptyMember(teamId, "staff"), id: staffId, name: "宮城 正樹", kana: "みやぎ まさき", birthDate: "1975-04-10", title: "部長", bench: true, photoConsent: false, updatedAt: t },
-    ...players.map((p) => ({ ...emptyMember(teamId, "player"), ...p, id: newId(), photoConsent: true, updatedAt: t })),
-    { ...emptyMember(teamId, "player"), id: newId(), name: "名取 大地", kana: "なとり だいち", isEntry: false, updatedAt: t },
-  ];
+export function emptySnapshot(): Snapshot {
   return {
-    version: 1,
-    university: { id: "u-sample", name: "サンプル大学", kana: "サンプルダイガク" },
-    regions: [
-      { id: "hokkaido", name: "北海道" },
-      { id: "tohoku", name: "東北" },
-      { id: "kanto", name: "関東" },
-      { id: "hokushinetsu", name: "北信越" },
-      { id: "tokai", name: "東海" },
-      { id: "kansai", name: "関西" },
-      { id: "chushikoku", name: "中四国" },
-      { id: "kyushu", name: "九州" },
-    ],
-    teams: [
-      {
-        id: teamId,
-        universityId: "u-sample",
-        gender: "men",
-        regionId: "tohoku",
-        status: "in_progress",
-        displayName: "サンプル大学",
-        contactName: "",
-        contactPhone: "",
-        contactEmail: "",
-        jhaNumber: "",
-        studentFedNumber: "",
-        escort: { name: "宮城 正樹", title: "教授（部長）", qualified: true, staffMemberId: staffId },
-        comment: "",
-        updatedAt: t,
-      },
-    ],
-    members,
+    tournamentId: "",
+    settings: DEFAULT_SETTINGS,
+    email: "",
+    myMemberships: [],
+    allMemberships: [],
+    regions: [],
+    universities: [],
+    tournamentUniversities: [],
+    teams: [],
+    members: [],
+    uniforms: [],
+    assets: [],
+    comments: [],
   };
 }
 
-// ---- 写真（IndexedDB） ----
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") return reject(new Error("この環境では写真を保存できません。"));
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("photos");
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
-  const db = await openDb();
-  return new Promise<T>((resolve, reject) => {
-    const tx = db.transaction("photos", mode);
-    const req = fn(tx.objectStore("photos"));
-    req.onsuccess = () => resolve(req.result as T);
-    req.onerror = () => reject(req.error);
-  });
+export interface NewMembership {
+  email: string;
+  role: Role;
+  universityId: string | null;
+  regionId: string | null;
+  displayName: string;
 }
 
-class LocalStore implements DataStore {
-  private snap: Snapshot;
+export interface DataStore {
+  readonly mode: "demo" | "live";
+  version: number;
+  subscribe(listener: () => void): () => void;
+
+  // ---- 読み出し ----
+  snapshot(): Snapshot;
+  settings(): TournamentSettings;
+  email(): string;
+  myRoles(): Role[];
+  myMemberships(): Membership[];
+  allMemberships(): Membership[];
+  regions(): Region[];
+  region(id: string): Region | undefined;
+  universities(): University[];
+  university(id: string): University | undefined;
+  tournamentUniversities(): TournamentUniversity[];
+  teams(): Team[];
+  team(id: string): Team | undefined;
+  members(teamId: string): Member[];
+  member(id: string): Member | undefined;
+  uniforms(teamId: string): Uniform[];
+  assets(teamId: string): TeamAsset[];
+  comments(teamId: string): ReviewComment[];
+
+  // ---- チームの入力 ----
+  createTeam(universityId: string, gender: Gender): Promise<Team>;
+  saveTeam(team: Team): Promise<void>;
+  saveMember(member: Member): Promise<Member>;
+  deleteMember(id: string): Promise<void>;
+  saveUniforms(teamId: string, uniforms: Uniform[]): Promise<void>;
+  putPhoto(teamId: string, blob: Blob): Promise<string>;
+  getPhoto(path: string): Promise<Blob | undefined>;
+  setAsset(teamId: string, kind: AssetKind, blob: Blob, width: number, height: number): Promise<void>;
+  removeAsset(teamId: string, kind: AssetKind): Promise<void>;
+
+  // ---- 提出・確認 ----
+  submit(teamId: string): Promise<void>;
+  review(teamId: string, action: "approve" | "return" | "confirm", comment: string): Promise<void>;
+  unlock(teamId: string, untilIso: string | null, reason: string): Promise<void>;
+  setPaperStatus(teamId: string, status: Team["paperStatus"]): Promise<void>;
+  setRegistrationConfirmed(teamId: string, confirmed: boolean): Promise<void>;
+
+  // ---- 事務局 ----
+  addUniversity(name: string, kana: string, regionId: string): Promise<void>;
+  addMembership(m: NewMembership): Promise<void>;
+  removeMembership(id: string): Promise<void>;
+  sendLoginLink(email: string): Promise<void>;
+
+  // ---- その他 ----
+  refresh(): Promise<void>;
+  signOut(): Promise<void>;
+}
+
+/** 読み出しの共通部分（写しを持ち、変わったら画面に知らせる） */
+export abstract class BaseStore {
+  protected snap: Snapshot = emptySnapshot();
   private listeners = new Set<() => void>();
   version = 0;
+  private photoCache = new Map<string, Promise<Blob | undefined>>();
 
-  constructor() {
-    this.snap = this.load();
-  }
-
-  private load(): Snapshot {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) {
-        const s = JSON.parse(raw) as Snapshot;
-        if (s.version === 1) return s;
-      }
-    } catch {
-      /* 読めなければ初期データ */
-    }
-    return seed();
-  }
-  private commit() {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(this.snap));
-    } catch {
-      /* プライベートモード等で保存できなくても、画面は動かす */
-    }
+  subscribe = (l: () => void) => {
+    this.listeners.add(l);
+    return () => {
+      this.listeners.delete(l);
+    };
+  };
+  protected emit() {
     this.version++;
     this.listeners.forEach((l) => l());
   }
-  subscribe = (l: () => void) => {
-    this.listeners.add(l);
-    return () => this.listeners.delete(l);
-  };
-
-  settings() {
-    return DEFAULT_SETTINGS;
+  protected setSnapshot(s: Snapshot) {
+    this.snap = s;
+    this.emit();
   }
-  university() {
-    return this.snap.university;
+
+  snapshot() {
+    return this.snap;
+  }
+  settings() {
+    return this.snap.settings;
+  }
+  email() {
+    return this.snap.email;
+  }
+  myMemberships() {
+    return this.snap.myMemberships;
+  }
+  myRoles(): Role[] {
+    const order: Role[] = ["team", "region", "office", "agency"];
+    return order.filter((r) => this.snap.myMemberships.some((m) => m.role === r));
+  }
+  allMemberships() {
+    return this.snap.allMemberships;
+  }
+  regions() {
+    return [...this.snap.regions].sort((a, b) => a.sortOrder - b.sortOrder);
   }
   region(id: string) {
     return this.snap.regions.find((r) => r.id === id);
+  }
+  universities() {
+    return this.snap.universities;
+  }
+  university(id: string) {
+    return this.snap.universities.find((u) => u.id === id);
+  }
+  tournamentUniversities() {
+    return this.snap.tournamentUniversities;
   }
   teams() {
     return this.snap.teams;
@@ -163,88 +182,47 @@ class LocalStore implements DataStore {
   team(id: string) {
     return this.snap.teams.find((t) => t.id === id);
   }
-  createTeam(gender: Gender): Team {
-    const existing = this.snap.teams.find((t) => t.gender === gender);
-    if (existing) return existing;
-    const t: Team = {
-      id: newId(),
-      universityId: this.snap.university.id,
-      gender,
-      regionId: this.snap.teams[0]?.regionId ?? "tohoku",
-      status: "not_started",
-      displayName: this.snap.university.name,
-      contactName: "",
-      contactPhone: "",
-      contactEmail: "",
-      jhaNumber: "",
-      studentFedNumber: "",
-      escort: { name: "", title: "", qualified: false, staffMemberId: null },
-      comment: "",
-      updatedAt: now(),
-    };
-    this.snap.teams = [...this.snap.teams, t];
-    this.commit();
-    return t;
-  }
-  saveTeam(team: Team) {
-    const t = { ...team, updatedAt: now(), status: team.status === "not_started" ? "in_progress" : team.status } as Team;
-    this.snap.teams = this.snap.teams.map((x) => (x.id === t.id ? t : x));
-    this.commit();
-  }
   members(teamId: string) {
     return this.snap.members.filter((m) => m.teamId === teamId);
   }
   member(id: string) {
     return this.snap.members.find((m) => m.id === id);
   }
-  saveMember(member: Member): Member {
-    const m = { ...member, id: member.id || newId(), updatedAt: now() };
-    const exists = this.snap.members.some((x) => x.id === m.id);
-    this.snap.members = exists ? this.snap.members.map((x) => (x.id === m.id ? m : x)) : [...this.snap.members, m];
-    this.snap.teams = this.snap.teams.map((t) =>
-      t.id === m.teamId && t.status === "not_started" ? { ...t, status: "in_progress" } : t,
-    );
-    this.commit();
-    return m;
+  uniforms(teamId: string) {
+    return this.snap.uniforms.filter((u) => u.teamId === teamId);
   }
-  async deleteMember(id: string) {
-    const m = this.member(id);
-    if (m?.photoKey) await idb("readwrite", (s) => s.delete(m.photoKey!)).catch(() => {});
-    this.snap.members = this.snap.members.filter((x) => x.id !== id);
-    this.snap.teams = this.snap.teams.map((t) =>
-      t.escort.staffMemberId === id ? { ...t, escort: { ...t.escort, staffMemberId: null } } : t,
-    );
-    this.commit();
+  assets(teamId: string) {
+    return this.snap.assets.filter((a) => a.teamId === teamId);
   }
-  async putPhoto(blob: Blob) {
-    const key = newId();
-    await idb("readwrite", (s) => s.put(blob, key));
-    return key;
+  comments(teamId: string) {
+    return this.snap.comments.filter((c) => c.teamId === teamId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
-  async getPhoto(key: string) {
-    return idb<Blob | undefined>("readonly", (s) => s.get(key)).catch(() => undefined);
+
+  /** 写真の読み出し（同じ写真は1回だけ取りに行く） */
+  getPhoto(path: string): Promise<Blob | undefined> {
+    let p = this.photoCache.get(path);
+    if (!p) {
+      p = this.fetchPhoto(path).catch(() => undefined);
+      this.photoCache.set(path, p);
+    }
+    return p;
   }
-  async reset() {
-    try {
-      localStorage.removeItem(LS_KEY);
-    } catch {}
-    await new Promise<void>((resolve) => {
-      try {
-        const req = indexedDB.deleteDatabase(DB_NAME);
-        req.onsuccess = req.onerror = req.onblocked = () => resolve();
-      } catch {
-        resolve();
-      }
-    });
-    this.snap = seed();
-    this.commit();
+  protected forgetPhoto(path: string) {
+    this.photoCache.delete(path);
   }
+  protected abstract fetchPhoto(path: string): Promise<Blob | undefined>;
 }
 
-let instance: LocalStore | null = null;
-export function getStore(): LocalStore {
-  if (!instance) instance = new LocalStore();
-  return instance;
+// ---- 画面から使う入口 ----
+
+let current: DataStore | null = null;
+
+export function setStore(store: DataStore) {
+  current = store;
+}
+export function getStore(): DataStore {
+  if (!current) throw new Error("データの保存先が設定されていません");
+  return current;
 }
 
 /** データが変わるたびに画面を描き直すためのフック */
@@ -254,28 +232,38 @@ export function useStore(): DataStore {
   return store;
 }
 
-/** 写真キーから表示用URLを作る */
-export function usePhotoUrl(key: string | null): string | null {
+/** 写真の保存場所から表示用URLを作る */
+export function usePhotoUrl(path: string | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!key) {
+    if (!path) {
       setUrl(null);
       return;
     }
-    let revoked = false;
+    let cancelled = false;
     let u: string | null = null;
     getStore()
-      .getPhoto(key)
+      .getPhoto(path)
       .then((b) => {
-        if (b && !revoked) {
+        if (b && !cancelled) {
           u = URL.createObjectURL(b);
           setUrl(u);
         }
       });
     return () => {
-      revoked = true;
+      cancelled = true;
       if (u) URL.revokeObjectURL(u);
     };
-  }, [key]);
+  }, [path]);
   return url;
+}
+
+/** 保存時のエラーを、画面に出せる日本語にする */
+export function toMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : String(e);
+  if (/row-level security|permission denied|violates row-level/i.test(msg))
+    return "保存できませんでした。締切を過ぎているか、この操作を行う権限がありません。";
+  if (/Failed to fetch|NetworkError|network/i.test(msg)) return "通信できませんでした。電波の良い場所で、もう一度お試しください。";
+  if (/JWT|session|not authenticated/i.test(msg)) return "ログインの有効期限が切れました。もう一度ログインしてください。";
+  return msg;
 }

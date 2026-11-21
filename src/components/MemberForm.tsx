@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
-import { useStore } from "@/lib/store";
+import { toMessage, useStore } from "@/lib/store";
 import { emptyMember, FOREIGN_LABEL, HANDEDNESS, POSITION_LABEL, POSITIONS, STAFF_TITLES, type ForeignStatus, type Member, type MemberKind, type Team } from "@/lib/types";
-import { isInsured, isMinor, validateMember, validateTeam } from "@/lib/validation";
+import { isInsured, isMinor, lockReason, validateMember, validateTeam } from "@/lib/validation";
 import { ConfirmButton } from "./ConfirmButton";
 import { Field } from "./Field";
 import { PhotoInput } from "./PhotoInput";
 import { go } from "./router";
+import { LockBanner } from "./ui";
 
 /** T-2a 選手の追加・編集 / 役員の追加・編集 */
 export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberKind; memberId: string | null }) {
@@ -15,6 +16,9 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
   const original = memberId ? store.member(memberId) : undefined;
   const [m, setM] = useState<Member>(original ?? emptyMember(team.id, kind));
   const [tried, setTried] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const locked = lockReason(team, store.settings());
   const back = () => go(team.gender, kind === "player" ? "players" : "staff");
 
   if (memberId && !original) {
@@ -45,22 +49,34 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
   const staffCount = others.filter((x) => x.kind === "staff").length;
   const overLimit = kind === "player" ? m.isEntry && entryCount >= s.limits.playerEntryMax : staffCount >= s.limits.staffMax;
 
-  function save(force: boolean) {
+  async function save(force: boolean) {
     setTried(true);
+    setSaveError(null);
     if (!m.name.trim()) {
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
     if (overLimit) return;
     if (errorCount > 0 && !force) return;
-    store.saveMember(m);
-    back();
+    setBusy(true);
+    try {
+      await store.saveMember(m);
+      back();
+    } catch (e) {
+      setSaveError(toMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function remove() {
     if (!original) return;
-    await store.deleteMember(original.id);
-    back();
+    try {
+      await store.deleteMember(original.id);
+      back();
+    } catch (e) {
+      setSaveError(toMessage(e));
+    }
   }
 
   return (
@@ -71,6 +87,8 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
         save(false);
       }}
     >
+      <LockBanner reason={locked} />
+      <fieldset className="plain stack" disabled={!!locked}>
       {kind === "player" && (
         <section className="card">
           <h3>掲載の区分</h3>
@@ -189,7 +207,13 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
           </label>
           {m.photoConsent ? (
             <>
-              <PhotoInput value={m.photoKey} onChange={(k) => set("photoKey", k)} rule={s.images.face} />
+              <PhotoInput
+                value={m.photoKey}
+                rule={s.images.face}
+                disabled={!!locked}
+                onSave={async (blob) => set("photoKey", await store.putPhoto(team.id, blob))}
+                onRemove={() => set("photoKey", null)}
+              />
               {shown.filter((i) => i.field === "photo").map((i, k) => (
                 <p key={k} className="msg-error">{i.message}</p>
               ))}
@@ -244,7 +268,7 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
         </section>
       )}
 
-      {overLimit && (
+      {overLimit && !locked && (
         <p className="msg-error card">
           {kind === "player" ? `エントリー選手はすでに${s.limits.playerEntryMax}名います。「氏名のみ掲載」にするか、ほかの選手を外してください。` : `役員はすでに${s.limits.staffMax}名います。`}
         </p>
@@ -262,21 +286,25 @@ export function MemberForm({ team, kind, memberId }: { team: Team; kind: MemberK
         </div>
       )}
 
+      </fieldset>
+      {saveError && <p className="msg-error card" role="alert">{saveError}</p>}
       <div className="actions sticky">
         <button type="button" className="btn" onClick={back}>
           戻る
         </button>
-        {tried && errorCount > 0 && !overLimit && m.name.trim() && (
-          <button type="button" className="btn" onClick={() => save(true)}>
+        {!locked && tried && errorCount > 0 && !overLimit && m.name.trim() && (
+          <button type="button" className="btn" onClick={() => save(true)} disabled={busy}>
             途中のまま保存
           </button>
         )}
-        <button type="submit" className="btn primary">
-          保存する
-        </button>
+        {!locked && (
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy ? "保存中…" : "保存する"}
+          </button>
+        )}
       </div>
 
-      {original && (
+      {original && !locked && (
         <div className="center-text">
           <ConfirmButton
             label={`この${kind === "player" ? "選手" : "役員"}を削除する`}

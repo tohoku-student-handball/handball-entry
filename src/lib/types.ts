@@ -39,8 +39,10 @@ export interface TournamentSettings {
   name: string;
   /** 大会初日（未成年の判定に使う）YYYY-MM-DD */
   startDate: string;
-  /** 申込締切 YYYY-MM-DD */
+  /** 申込締切 YYYY-MM-DD（表示用） */
   entryDeadline: string;
+  /** 申込締切の日時（ISO形式。ロックの判定に使う） */
+  entryDeadlineAt: string;
   limits: {
     staffMax: number;
     playerEntryMax: number;
@@ -67,8 +69,83 @@ export interface University {
 
 export interface Region {
   id: string;
+  code: string;
   name: string;
+  sortOrder: number;
 }
+
+export type Role = "team" | "region" | "office" | "agency";
+export const ROLE_LABEL: Record<Role, string> = {
+  team: "チーム担当者",
+  region: "地区学連",
+  office: "事務局",
+  agency: "旅行社",
+};
+
+/** 所属（ログインしたメールアドレスごとの役割） */
+export interface Membership {
+  id: string;
+  email: string;
+  role: Role;
+  universityId: string | null;
+  regionId: string | null;
+  displayName: string;
+  invitedAt: string | null;
+}
+
+/** その年度に参加する大学と所属地区 */
+export interface TournamentUniversity {
+  universityId: string;
+  regionId: string;
+}
+
+export type UniformUse = "CP" | "GK";
+export type UniformTone = "dark" | "light";
+export interface Uniform {
+  id: string;
+  teamId: string;
+  use: UniformUse;
+  color: string;
+  tone: UniformTone;
+  sponsor: boolean;
+}
+
+export type AssetKind = "group" | "logo";
+export const ASSET_LABEL: Record<AssetKind, string> = { group: "チーム集合写真", logo: "チームロゴ" };
+export interface TeamAsset {
+  id: string;
+  teamId: string;
+  kind: AssetKind;
+  path: string;
+  width: number | null;
+  height: number | null;
+}
+
+export type ReviewAction = "submit" | "approve" | "return" | "confirm" | "unlock" | "note";
+export const REVIEW_ACTION_LABEL: Record<ReviewAction, string> = {
+  submit: "提出",
+  approve: "地区学連が承認",
+  return: "差し戻し",
+  confirm: "事務局が確認",
+  unlock: "ロック解除",
+  note: "メモ",
+};
+export interface ReviewComment {
+  id: string;
+  teamId: string;
+  authorEmail: string;
+  authorRole: string;
+  action: ReviewAction;
+  body: string;
+  createdAt: string;
+}
+
+export type PaperStatus = "not_sent" | "sent" | "received";
+export const PAPER_STATUS_LABEL: Record<PaperStatus, string> = {
+  not_sent: "未送付",
+  sent: "郵送済",
+  received: "到着確認済",
+};
 
 export interface Escort {
   name: string;
@@ -81,6 +158,7 @@ export interface Escort {
 
 export interface Team {
   id: string;
+  tournamentId: string;
   universityId: string;
   gender: Gender;
   regionId: string;
@@ -93,6 +171,12 @@ export interface Team {
   studentFedNumber: string;
   escort: Escort;
   comment: string;
+  /** JHA・全日本学連の登録を事務局が確認した */
+  registrationConfirmed: boolean;
+  paperStatus: PaperStatus;
+  /** 事務局が締切後のロックを解除している期限（ISO形式） */
+  unlockedUntil: string | null;
+  submittedAt: string | null;
   updatedAt: string;
 }
 
@@ -142,6 +226,7 @@ export interface Member {
   isStudent: boolean;
   /** 役員（学生以外）：保険に任意加入するか */
   insuranceOptIn: boolean;
+  /** 顔写真の保存場所 */
   photoKey: string | null;
   photoConsent: boolean;
   dopingConsentChecked: boolean;

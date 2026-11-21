@@ -105,16 +105,23 @@ export async function loadImage(file: File): Promise<{ img: HTMLImageElement; in
   return { img, url, info: { type: file.type, bytes: file.size, width: img.naturalWidth, height: img.naturalHeight } };
 }
 
-export async function cropAndResize(img: HTMLImageElement, crop: CropBox, maxLong: number): Promise<Blob> {
+/** 切り抜いて縮小する。keepPng=true なら透明部分を残して PNG で保存する（ロゴ用） */
+export async function cropAndResize(img: HTMLImageElement, crop: CropBox, maxLong: number, keepPng = false): Promise<Blob> {
   const out = fitLongSide(crop.width, crop.height, maxLong);
   const canvas = document.createElement("canvas");
   canvas.width = out.width;
   canvas.height = out.height;
   const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, out.width, out.height);
+  if (!keepPng) {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, out.width, out.height);
+  }
   ctx.drawImage(img, crop.x, crop.y, crop.width, crop.height, 0, 0, out.width, out.height);
   return new Promise((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("画像の変換に失敗しました。"))), "image/jpeg", 0.9),
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("画像の変換に失敗しました。"))),
+      keepPng ? "image/png" : "image/jpeg",
+      0.9,
+    ),
   );
 }

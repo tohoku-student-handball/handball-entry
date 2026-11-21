@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS as S } from "./settings";
 import { emptyMember, type Member, type Team } from "./types";
-import { ageOn, feeSummary, validateMember, validateTeam } from "./validation";
+import { ageOn, feeSummary, isEditable, validateAssets, validateMember, validateTeam, validateUniforms } from "./validation";
+import type { Uniform } from "./types";
 
 let seq = 0;
 function player(over: Partial<Member> = {}): Member {
@@ -42,6 +43,7 @@ function staff(over: Partial<Member> = {}): Member {
 function team(over: Partial<Team> = {}): Team {
   return {
     id: "t1",
+    tournamentId: "tr1",
     universityId: "u1",
     gender: "men",
     regionId: "tohoku",
@@ -54,6 +56,10 @@ function team(over: Partial<Team> = {}): Team {
     studentFedNumber: "2",
     escort: { name: "佐藤 花子", title: "教授", qualified: true, staffMemberId: null },
     comment: "",
+    registrationConfirmed: false,
+    paperStatus: "not_sent",
+    unlockedUntil: null,
+    submittedAt: null,
     updatedAt: "",
     ...over,
   };
@@ -150,4 +156,36 @@ describe("feeSummary", () => {
     expect(f.insured).toBe(4);
     expect(f.total).toBe(75000 + 4 * 500);
   });
+});
+
+describe("validateUniforms", () => {
+  const u = (use: "CP" | "GK", tone: "dark" | "light", color = "赤"): Uniform => ({ id: use + tone, teamId: "t1", use, tone, color, sponsor: false });
+  it("CP・GKそれぞれ濃淡がそろえばOK", () => {
+    expect(errors(validateUniforms([u("CP", "dark"), u("CP", "light"), u("GK", "dark"), u("GK", "light")]))).toEqual([]);
+  });
+  it("GKの淡色がなければエラー", () => {
+    expect(errors(validateUniforms([u("CP", "dark"), u("CP", "light"), u("GK", "dark")])).join()).toContain("GK（ゴールキーパー）用の淡い色");
+  });
+  it("色の名前が空ならエラー", () => {
+    expect(errors(validateUniforms([u("CP", "dark", ""), u("CP", "light"), u("GK", "dark"), u("GK", "light")])).join()).toContain("色の名前");
+  });
+});
+
+describe("validateAssets", () => {
+  it("集合写真とロゴの両方が必要", () => {
+    expect(errors(validateAssets([])).length).toBe(2);
+    expect(errors(validateAssets([{ id: "a", teamId: "t1", kind: "logo", path: "p", width: 1, height: 1 }])).join()).toContain("集合写真");
+  });
+});
+
+describe("isEditable", () => {
+  const before = new Date("2027-09-30T12:00:00+09:00");
+  const after = new Date("2027-10-02T12:00:00+09:00");
+  it("締切前で入力中なら変更できる", () => expect(isEditable(team(), S, before)).toBe(true));
+  it("締切当日23:59までは変更できる", () => expect(isEditable(team(), S, new Date("2027-10-01T23:59:00+09:00"))).toBe(true));
+  it("締切後は変更できない", () => expect(isEditable(team(), S, after)).toBe(false));
+  it("提出済みは締切前でも変更できない", () => expect(isEditable(team({ status: "submitted" }), S, before)).toBe(false));
+  it("差し戻し中は変更できる", () => expect(isEditable(team({ status: "returned" }), S, before)).toBe(true));
+  it("締切後でも事務局がロック解除中なら変更できる", () =>
+    expect(isEditable(team({ unlockedUntil: "2027-10-05T00:00:00+09:00" }), S, after)).toBe(true));
 });

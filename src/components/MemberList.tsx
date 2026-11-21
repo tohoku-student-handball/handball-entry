@@ -1,9 +1,10 @@
 "use client";
 import { useStore, usePhotoUrl } from "@/lib/store";
 import { FOREIGN_LABEL, type Member, type MemberKind, type Team } from "@/lib/types";
-import { isMinor, validateTeam, type Issue } from "@/lib/validation";
+import { isMinor, lockReason, validateTeam, type Issue } from "@/lib/validation";
 import { IssueList } from "./Field";
 import { href } from "./router";
+import { LockBanner } from "./ui";
 
 /** T-2 選手名簿 / T-3 役員名簿 */
 export function MemberList({ team, kind }: { team: Team; kind: MemberKind }) {
@@ -27,8 +28,11 @@ export function MemberList({ team, kind }: { team: Team; kind: MemberKind }) {
   const dupIssues = kind === "player" ? issues.filter((i) => i.message.includes("重複")) : [];
   const uniqueDup = [...new Map(dupIssues.map((i) => [i.message, i])).values()];
 
+  const locked = lockReason(team, s);
+
   return (
     <div className="stack">
+      <LockBanner reason={locked} />
       <section className="card">
         <div className="counters">
           {kind === "player" ? (
@@ -46,9 +50,11 @@ export function MemberList({ team, kind }: { team: Team; kind: MemberKind }) {
           )}
         </div>
         <IssueList issues={[...teamIssues, ...uniqueDup]} />
-        <a className="btn primary block" href={href(g, kind === "player" ? "players" : "staff", "new")}>
-          ＋ {kind === "player" ? "選手" : "役員"}を追加する
-        </a>
+        {!locked && (
+          <a className="btn primary block" href={href(g, kind === "player" ? "players" : "staff", "new")}>
+            ＋ {kind === "player" ? "選手" : "役員"}を追加する
+          </a>
+        )}
       </section>
 
       <section className="card flush">
