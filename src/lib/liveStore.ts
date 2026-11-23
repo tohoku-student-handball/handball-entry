@@ -167,6 +167,8 @@ export class LiveStore extends BaseStore implements DataStore {
     });
     if (error) {
       if (/rate limit|seconds/i.test(error.message)) throw new Error("メールの送信回数が多すぎます。1分ほど待ってから、もう一度お試しください。");
+      if (/sending .*email|smtp/i.test(error.message))
+        throw new Error("ログイン用のメールを送れませんでした。システムのメール送信設定に問題があります。大会事務局にご連絡ください。");
       throw new Error(error.message);
     }
   }
