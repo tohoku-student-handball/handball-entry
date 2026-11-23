@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS as S } from "./settings";
 import { emptyMember, type Member, type Team } from "./types";
 import { ageOn, feeSummary, isEditable, validateAssets, validateMember, validateTeam, validateUniforms } from "./validation";
-import type { Uniform } from "./types";
+import type { Features, Uniform } from "./types";
+import { ALL_FEATURES } from "./types";
 
 let seq = 0;
 function player(over: Partial<Member> = {}): Member {
@@ -31,6 +32,7 @@ function staff(over: Partial<Member> = {}): Member {
   return {
     ...emptyMember("t1", "staff"),
     id: `s${seq}`,
+    personId: `ps${seq}`,
     name: "佐藤 花子",
     kana: "さとう はなこ",
     birthDate: "1980-01-01",
@@ -47,6 +49,7 @@ function team(over: Partial<Team> = {}): Team {
     universityId: "u1",
     gender: "men",
     regionId: "tohoku",
+    divisionId: null,
     status: "in_progress",
     displayName: "サンプル大学",
     contactName: "主務",
@@ -107,7 +110,7 @@ describe("validateTeam", () => {
 
   it("問題のないチーム", () => {
     const ms = base();
-    expect(errors(validateTeam(team({ escort: { name: "佐藤", title: "教授", qualified: true, staffMemberId: ms[0].id } }), ms, S))).toEqual([]);
+    expect(errors(validateTeam(team({ escort: { name: "佐藤", title: "教授", qualified: true, staffMemberId: ms[0].personId } }), ms, S))).toEqual([]);
   });
   it("背番号の重複を検出する", () => {
     const ms = [staff(), player({ number: 7 }), player({ number: 7 })];
@@ -188,4 +191,25 @@ describe("isEditable", () => {
   it("差し戻し中は変更できる", () => expect(isEditable(team({ status: "returned" }), S, before)).toBe(true));
   it("締切後でも事務局がロック解除中なら変更できる", () =>
     expect(isEditable(team({ unlockedUntil: "2027-10-05T00:00:00+09:00" }), S, after)).toBe(true));
+});
+
+describe("リーグ戦（パンフレット・引率責任者なし）", () => {
+  const LEAGUE: Features = { ...ALL_FEATURES, pamphlet: false, insurance: false, travel: false, escort: false, paper: false, matches: true };
+  it("学部・出身高校・身長体重・写真がなくてもエラーにならない", () => {
+    const m = player({ number: 5, faculty: "", highSchool: "", heightCm: null, weightKg: null, handedness: "", photoKey: null, photoConsent: false });
+    expect(errors(validateMember(m, S, LEAGUE))).toEqual([]);
+    expect(errors(validateMember(m, S)).length).toBeGreaterThan(0);
+  });
+  it("学年・ポジション・背番号は必要", () => {
+    const e = errors(validateMember(player({ grade: null, position: "", number: null }), S, LEAGUE)).join();
+    expect(e).toContain("学年");
+    expect(e).toContain("ポジション");
+    expect(e).toContain("背番号");
+  });
+  it("引率責任者がなくてもエラーにならない", () => {
+    const ms = [staff(), player()];
+    const t = team({ escort: { name: "", title: "", qualified: false, staffMemberId: null } });
+    expect(errors(validateTeam(t, ms, S, LEAGUE)).filter((m) => m.includes("引率"))).toEqual([]);
+    expect(errors(validateTeam(t, ms, S)).filter((m) => m.includes("引率")).length).toBe(1);
+  });
 });

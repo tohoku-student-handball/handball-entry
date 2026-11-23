@@ -11,8 +11,10 @@ import { ActionButton, LockBanner } from "./ui";
 export function TeamInfoForm({ team }: { team: Team }) {
   const store = useStore();
   const [t, setT] = useState<Team>(team);
-  const staff = store.members(team.id).filter((m) => m.kind === "staff");
-  const issues = validateTeam(t, store.members(team.id), store.settings()).filter((i) => !i.memberId);
+  const f = store.features();
+  // 引率責任者の候補：部員名簿の役員（大会をまたいで同じ人を指すので、名簿の人の id で持つ）
+  const staff = store.roster(team.universityId, team.gender).filter((p) => p.kind === "staff" && p.active);
+  const issues = validateTeam(t, store.members(team.id), store.settings(), f).filter((i) => !i.memberId);
   const set = <K extends keyof Team>(k: K, v: Team[K]) => setT({ ...t, [k]: v });
   const setEscort = (patch: Partial<Team["escort"]>) => setT({ ...t, escort: { ...t.escort, ...patch } });
 
@@ -57,6 +59,7 @@ export function TeamInfoForm({ team }: { team: Team }) {
         </Field>
       </section>
 
+      {f.escort && (
       <section className="card">
         <h3>引率責任者（様式Ⅲ）</h3>
         <Field label="氏名" required issues={issues} field="escort">
@@ -68,9 +71,9 @@ export function TeamInfoForm({ team }: { team: Team }) {
         <Field label="役員名簿との対応" hint="役員名簿に登録されていない人は、ベンチに入れません。">
           <select value={t.escort.staffMemberId ?? ""} onChange={(e) => setEscort({ staffMemberId: e.target.value || null })}>
             <option value="">役員名簿に登録していない</option>
-            {staff.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.title}：{m.name}
+            {staff.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.defaultTitle}：{p.name}
               </option>
             ))}
           </select>
@@ -80,6 +83,7 @@ export function TeamInfoForm({ team }: { team: Team }) {
           <span>大学の専任教職員、または部長が任命した者です<span className="req">必須</span></span>
         </label>
       </section>
+      )}
 
       </fieldset>
       <div className="actions">

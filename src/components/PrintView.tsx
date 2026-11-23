@@ -14,7 +14,9 @@ export function PrintView({ team }: { team: Team }) {
   const entries = members.filter((m) => m.kind === "player" && m.isEntry).sort((a, b) => (a.number ?? 999) - (b.number ?? 999));
   const nameOnly = members.filter((m) => m.kind === "player" && !m.isEntry);
   const uniforms = store.uniforms(team.id);
-  const fees = feeSummary(members, s);
+  const f = store.features();
+  const division = store.division(team.divisionId);
+  const fees = feeSummary(members, s, { insurance: f.insurance, entryFee: division?.entryFee });
   const draft = !["submitted", "region_approved", "office_confirmed"].includes(team.status);
   const blankDate = "令和　　年　　月　　日";
 
@@ -22,7 +24,8 @@ export function PrintView({ team }: { team: Team }) {
     <div className="stack">
       <section className="card no-print">
         <p>
-          A4用紙で印刷してください（2枚になります）。印刷したら、<strong>大学の角印</strong>と、部長の署名・押印をして郵送してください。
+          A4用紙で印刷してください。
+          {f.paper && <>印刷したら、<strong>大学の角印</strong>と、部長の署名・押印をして郵送してください。</>}
         </p>
         {draft && <p className="notice">まだ提出していないため、申込書に「下書き」と表示されます。提出してから印刷してください。</p>}
         <div className="row">
@@ -35,7 +38,7 @@ export function PrintView({ team }: { team: Team }) {
 
       <article className="sheet">
         {draft && <p className="draft-mark">下書き（未提出）</p>}
-        <p className="sheet-form">様式Ⅰ</p>
+        <p className="sheet-form">{f.paper ? "様式Ⅰ" : "申込内容の控え"}</p>
         <h2 className="sheet-title">
           {s.name}
           <br />
@@ -44,7 +47,7 @@ export function PrintView({ team }: { team: Team }) {
         <table className="form-table">
           <tbody>
             <tr><th>大学名</th><td colSpan={3}>{uni?.name}</td></tr>
-            <tr><th>チーム（男女）</th><td>{team.displayName}（{GENDER_LABEL[team.gender]}）</td><th>所属地区</th><td>{store.region(team.regionId)?.name}</td></tr>
+            <tr><th>チーム（男女）</th><td>{team.displayName}（{GENDER_LABEL[team.gender]}）</td><th>{division ? "部" : "所属地区"}</th><td>{division ? division.name : store.region(team.regionId)?.name}</td></tr>
             <tr><th>JHA登録番号</th><td>{team.jhaNumber}</td><th>全日本学連登録番号</th><td>{team.studentFedNumber}</td></tr>
             <tr><th>連絡担当者</th><td>{team.contactName}</td><th>電話</th><td>{team.contactPhone}</td></tr>
             <tr><th>メール</th><td colSpan={3}>{team.contactEmail}</td></tr>
@@ -53,10 +56,10 @@ export function PrintView({ team }: { team: Team }) {
 
         <h3 className="sheet-h">役員（{staff.length}名）</h3>
         <table className="form-table dense">
-          <thead><tr><th>役職</th><th>氏名</th><th>ふりがな</th><th>ベンチ</th><th>傷害保険</th></tr></thead>
+          <thead><tr><th>役職</th><th>氏名</th><th>ふりがな</th><th>ベンチ</th>{f.insurance && <th>傷害保険</th>}</tr></thead>
           <tbody>
             {staff.map((m) => (
-              <tr key={m.id}><td>{m.title}</td><td>{m.name}</td><td>{m.kana}</td><td className="c">{m.bench ? "○" : ""}</td><td className="c">{isInsured(m) ? "加入" : ""}</td></tr>
+              <tr key={m.id}><td>{m.title}</td><td>{m.name}</td><td>{m.kana}</td><td className="c">{m.bench ? "○" : ""}</td>{f.insurance && <td className="c">{isInsured(m) ? "加入" : ""}</td>}</tr>
             ))}
           </tbody>
         </table>
@@ -91,7 +94,8 @@ export function PrintView({ team }: { team: Team }) {
           ))}
         </p>
         <p className="sheet-note">
-          参加料 {yen(fees.entryFee)}／傷害保険料 {yen(s.fees.insurancePerPerson)}×{fees.insured}名＝{yen(fees.insuranceFee)}／<strong>合計 {yen(fees.total)}</strong>
+          参加料 {yen(fees.entryFee)}
+          {f.insurance && <>／傷害保険料 {yen(s.fees.insurancePerPerson)}×{fees.insured}名＝{yen(fees.insuranceFee)}</>}／<strong>合計 {yen(fees.total)}</strong>
         </p>
 
         <p className="sheet-declare">上記のとおり、本大会への参加を申し込みます。</p>
@@ -106,6 +110,7 @@ export function PrintView({ team }: { team: Team }) {
         <p className="sheet-foot">状態：{TEAM_STATUS_LABEL[team.status]}／出力：{new Date().toLocaleString("ja-JP")}</p>
       </article>
 
+      {f.escort && (
       <article className="sheet page-break">
         {draft && <p className="draft-mark">下書き（未提出）</p>}
         <p className="sheet-form">様式Ⅲ</p>
@@ -134,6 +139,7 @@ export function PrintView({ team }: { team: Team }) {
           <div className="seal-box">大学<br />角印</div>
         </div>
       </article>
+      )}
     </div>
   );
 }

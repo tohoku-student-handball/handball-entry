@@ -14,9 +14,11 @@ export function TeamSummary({ team }: { team: Team }) {
   const nameOnly = members.filter((m) => m.kind === "player" && !m.isEntry);
   const uniforms = store.uniforms(team.id);
   const assets = store.assets(team.id);
-  const fees = feeSummary(members, s);
+  const f = store.features();
+  const division = store.division(team.divisionId);
+  const fees = feeSummary(members, s, { insurance: f.insurance, entryFee: division?.entryFee });
   const sponsor = sponsorFee(uniforms, s);
-  const escortStaff = team.escort.staffMemberId ? staff.find((m) => m.id === team.escort.staffMemberId) : undefined;
+  const escortStaff = team.escort.staffMemberId ? staff.find((m) => m.personId === team.escort.staffMemberId) : undefined;
 
   return (
     <div className="stack">
@@ -25,19 +27,19 @@ export function TeamSummary({ team }: { team: Team }) {
         <table className="kv left">
           <tbody>
             <tr><th>大学・チーム</th><td>{store.university(team.universityId)?.name}（{GENDER_LABEL[team.gender]}）／表記：{team.displayName}</td></tr>
-            <tr><th>地区</th><td>{store.region(team.regionId)?.name}</td></tr>
+            <tr><th>{division ? "部" : "地区"}</th><td>{division ? division.name : store.region(team.regionId)?.name}</td></tr>
             <tr><th>連絡担当者</th><td>{team.contactName || "—"}／{team.contactPhone || "—"}／{team.contactEmail || "—"}</td></tr>
             <tr><th>JHA登録番号</th><td>{team.jhaNumber || "—"}{team.registrationConfirmed && <span className="tag ok-tag">事務局確認済</span>}</td></tr>
             <tr><th>全日本学連 登録番号</th><td>{team.studentFedNumber || "—"}</td></tr>
-            <tr>
+            {f.escort && <tr>
               <th>引率責任者</th>
               <td>
                 {team.escort.name || "—"}（{team.escort.title || "職名なし"}）
                 {team.escort.qualified ? "・専任教職員等の確認済" : "・資格の確認なし"}
                 {!escortStaff && team.escort.name && <span className="tag warn-tag">役員名簿に未登録（ベンチ不可）</span>}
               </td>
-            </tr>
-            <tr><th>振込額（見込み）</th><td>{yen(fees.total)}（参加料 {yen(fees.entryFee)}＋保険 {fees.insured}名 {yen(fees.insuranceFee)}）</td></tr>
+            </tr>}
+            <tr><th>振込額（見込み）</th><td>{yen(fees.total)}{f.insurance && `（参加料 ${yen(fees.entryFee)}＋保険 ${fees.insured}名 ${yen(fees.insuranceFee)}）`}</td></tr>
           </tbody>
         </table>
       </section>
@@ -46,16 +48,16 @@ export function TeamSummary({ team }: { team: Team }) {
         <h3>役員（{staff.length}名）</h3>
         <div className="table-wrap">
           <table className="grid-table">
-            <thead><tr><th>写真</th><th>役職</th><th>氏名</th><th>ふりがな</th><th>ベンチ</th><th>保険</th></tr></thead>
+            <thead><tr>{f.pamphlet && <th>写真</th>}<th>役職</th><th>氏名</th><th>ふりがな</th><th>ベンチ</th>{f.insurance && <th>保険</th>}</tr></thead>
             <tbody>
               {staff.map((m) => (
                 <tr key={m.id}>
-                  <td><Thumb m={m} /></td>
+                  {f.pamphlet && <td><Thumb m={m} /></td>}
                   <td>{m.title}</td>
                   <td>{m.name}</td>
                   <td>{m.kana}</td>
                   <td>{m.bench ? "○" : ""}</td>
-                  <td>{isInsured(m) ? (m.isStudent ? "加入（学生）" : "加入") : "—"}</td>
+                  {f.insurance && <td>{isInsured(m) ? (m.isStudent ? "加入（学生）" : "加入") : "—"}</td>}
                 </tr>
               ))}
             </tbody>
@@ -68,12 +70,12 @@ export function TeamSummary({ team }: { team: Team }) {
         <div className="table-wrap">
           <table className="grid-table">
             <thead>
-              <tr><th>写真</th><th>No.</th><th>氏名</th><th>ふりがな</th><th>学年</th><th>Pos</th><th>身長</th><th>体重</th><th>利き手</th><th>出身高校</th><th>学部</th><th>区分</th><th>ベンチ</th></tr>
+              <tr>{f.pamphlet && <th>写真</th>}<th>No.</th><th>氏名</th><th>ふりがな</th><th>学年</th><th>Pos</th><th>身長</th><th>体重</th><th>利き手</th><th>出身高校</th><th>学部</th><th>区分</th><th>ベンチ</th></tr>
             </thead>
             <tbody>
               {entries.map((m) => (
                 <tr key={m.id}>
-                  <td><Thumb m={m} /></td>
+                  {f.pamphlet && <td><Thumb m={m} /></td>}
                   <td className="num-cell">{m.number ?? "—"}</td>
                   <td>{m.name}</td>
                   <td>{m.kana}</td>
@@ -118,6 +120,7 @@ export function TeamSummary({ team }: { team: Team }) {
         {sponsor.count > 0 && <p className="small">協賛企業名入り {sponsor.count}着種：当日現金払い {yen(sponsor.amount)}</p>}
       </section>
 
+      {f.pamphlet && (
       <section className="card">
         <h3>集合写真・ロゴ</h3>
         <div className="asset-thumbs">
@@ -127,6 +130,7 @@ export function TeamSummary({ team }: { team: Team }) {
           })}
         </div>
       </section>
+      )}
     </div>
   );
 }

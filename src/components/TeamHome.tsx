@@ -14,11 +14,13 @@ export function TeamHome({ team }: { team: Team }) {
   const members = store.members(team.id);
   const uniforms = store.uniforms(team.id);
   const assets = store.assets(team.id);
-  const issues = validateSubmission(team, members, uniforms, assets, s);
+  const f = store.features();
+  const division = store.division(team.divisionId);
+  const issues = validateSubmission(team, members, uniforms, assets, s, f);
   const players = members.filter((m) => m.kind === "player");
   const entries = players.filter((m) => m.isEntry);
   const staff = members.filter((m) => m.kind === "staff");
-  const fees = feeSummary(members, s);
+  const fees = feeSummary(members, s, { insurance: f.insurance, entryFee: division?.entryFee });
   const sponsor = sponsorFee(uniforms, s);
   const g = team.gender;
   const errorCount = issues.filter((i) => i.level === "error").length;
@@ -26,6 +28,8 @@ export function TeamHome({ team }: { team: Team }) {
   const memberIssues = (kind: "player" | "staff") =>
     issues.filter((i) => i.level === "error" && i.memberId && members.find((m) => m.id === i.memberId)?.kind === kind).length;
   const infoErrors = issues.filter((i) => i.level === "error" && !i.memberId && ["contact", "jha", "fed", "escort"].includes(i.field ?? "")).length;
+  const rosterCount = store.roster(team.universityId, team.gender).filter((p) => p.active).length;
+  const entryErrors = issues.filter((i) => i.level === "error" && (!i.memberId ? !["contact", "jha", "fed", "escort", "uniform", "asset"].includes(i.field ?? "") : i.field === "number" || i.field === "foreignStatus")).length;
   const photoMissing = members.filter((m) => (m.kind === "staff" || m.isEntry) && m.photoConsent && !m.photoKey).length;
   const uniformErrors = validateUniforms(uniforms).length;
   const assetErrors = validateAssets(assets).length;
@@ -41,7 +45,8 @@ export function TeamHome({ team }: { team: Team }) {
         <div className="status-row">
           <div>
             <p className="muted small">
-              {GENDER_LABEL[g]}チーム／{store.region(team.regionId)?.name}地区
+              {store.tournament().shortName}／{GENDER_LABEL[g]}チーム
+              {division ? `／${division.name}` : `／${store.region(team.regionId)?.name}地区`}
             </p>
             <h2 className="team-name">{team.displayName}</h2>
           </div>
@@ -83,32 +88,32 @@ export function TeamHome({ team }: { team: Team }) {
       <section className="card">
         <h3>やることリスト</h3>
         <ul className="todo">
-          <Todo to={href(g, "info")} title="基本情報・登録番号・引率責任者" done={infoErrors === 0} detail={infoErrors ? `未入力・要確認 ${infoErrors}件` : "入力済み"} />
+          <Todo to={href(g, "info")} title={f.escort ? "基本情報・登録番号・引率責任者" : "基本情報・登録番号"} done={infoErrors === 0} detail={infoErrors ? `未入力・要確認 ${infoErrors}件` : "入力済み"} />
           <Todo
-            to={href(g, "players")}
-            title="選手名簿"
-            done={memberIssues("player") === 0 && entries.length > 0 && entries.length <= s.limits.playerEntryMax}
-            detail={`エントリー ${entries.length}/${s.limits.playerEntryMax}名・氏名のみ ${players.length - entries.length}名${memberIssues("player") ? `・要修正 ${memberIssues("player")}件` : ""}`}
+            to={href(g, "roster")}
+            title="部員名簿（年度・全大会で共通）"
+            done={rosterCount > 0 && memberIssues("player") + memberIssues("staff") === 0}
+            detail={`${rosterCount}名登録${memberIssues("player") + memberIssues("staff") ? `・エントリーした人の入力不足 ${memberIssues("player") + memberIssues("staff")}件` : ""}`}
           />
           <Todo
-            to={href(g, "staff")}
-            title="役員名簿"
-            done={memberIssues("staff") === 0 && staff.length > 0 && staff.length <= s.limits.staffMax}
-            detail={`${staff.length}/${s.limits.staffMax}名${memberIssues("staff") ? `・要修正 ${memberIssues("staff")}件` : ""}`}
+            to={href(g, "entry")}
+            title="エントリー（この大会の背番号・ベンチ）"
+            done={entryErrors === 0 && entries.length > 0 && staff.length > 0}
+            detail={`選手 ${entries.length}/${s.limits.playerEntryMax}名・役員 ${staff.length}/${s.limits.staffMax}名${f.pamphlet ? `・氏名のみ ${players.length - entries.length}名` : ""}${entryErrors ? `・要修正 ${entryErrors}件` : ""}`}
           />
-          <Todo to={href(g, "players")} title="顔写真" done={photoMissing === 0} detail={photoMissing ? `未提出 ${photoMissing}名` : "そろっています"} />
+          {f.pamphlet && <Todo to={href(g, "roster")} title="顔写真" done={photoMissing === 0} detail={photoMissing ? `未提出 ${photoMissing}名` : "そろっています"} />}
           <Todo to={href(g, "uniform")} title="ユニフォーム" done={uniformErrors === 0} detail={uniformErrors ? "CP用・GK用の濃色・淡色を登録してください" : `${uniforms.length}着種 登録済み`} />
-          <Todo to={href(g, "assets")} title="集合写真・ロゴ" done={assetErrors === 0} detail={assetErrors ? `未提出 ${assetErrors}件` : "そろっています"} />
+          {f.pamphlet && <Todo to={href(g, "assets")} title="集合写真・ロゴ" done={assetErrors === 0} detail={assetErrors ? `未提出 ${assetErrors}件` : "そろっています"} />}
           <Todo
             to={href(g, "submit")}
-            title={submitted ? "提出内容・申込書の印刷" : "最終確認・提出"}
+            title={submitted ? (f.paper ? "提出内容・申込書の印刷" : "提出内容") : "最終確認・提出"}
             done={submitted}
             detail={submitted ? "提出済み" : errorCount ? `直す必要がある項目 ${errorCount}件` : "提出できます"}
           />
           <li className="todo-item later">
             <span className="todo-mark">…</span>
             <span>
-              保険・振込（M3で追加）／交通・宿泊・弁当（M4で追加）
+              参加費の振込（M3で追加）{f.travel ? "／交通・宿泊・弁当（M4で追加）" : ""}{f.matches ? "／試合ごとのメンバー提出（2月に追加）" : ""}
             </span>
           </li>
         </ul>
@@ -122,12 +127,14 @@ export function TeamHome({ team }: { team: Team }) {
               <th>参加料</th>
               <td>{yen(fees.entryFee)}</td>
             </tr>
-            <tr>
-              <th>傷害保険料</th>
-              <td>
-                {yen(s.fees.insurancePerPerson)} × {fees.insured}名 = {yen(fees.insuranceFee)}
-              </td>
-            </tr>
+            {f.insurance && (
+              <tr>
+                <th>傷害保険料</th>
+                <td>
+                  {yen(s.fees.insurancePerPerson)} × {fees.insured}名 = {yen(fees.insuranceFee)}
+                </td>
+              </tr>
+            )}
             <tr className="total">
               <th>振込額の合計</th>
               <td>{yen(fees.total)}</td>
@@ -139,7 +146,10 @@ export function TeamHome({ team }: { team: Team }) {
             協賛企業名入りユニフォーム：{sponsor.count}着種 × {yen(s.fees.sponsorUniform)} = {yen(sponsor.amount)}（振込ではなく、大会当日に現金でお支払いください）
           </p>
         )}
-        <p className="hint">選手・学生役員は保険に全員加入、それ以外の役員は任意です。振込先と振込名義のルールは M3 で表示します。</p>
+        <p className="hint">
+          {f.insurance && "選手・学生役員は保険に全員加入、それ以外の役員は任意です。"}
+          {fees.entryFee === 0 && "参加料は主催者が設定中です。"}振込先と振込名義のルールは M3 で表示します。
+        </p>
       </section>
 
       <section className="card">

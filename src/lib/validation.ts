@@ -1,8 +1,8 @@
 // 申込内容のルール判定。画面にもデータベースにも依存しない純粋な関数だけを置きます。
 // level: "error" は提出できない不備、"warning" は注意（提出は可能）。
 
-import type { Member, Team, TeamAsset, TournamentSettings, Uniform } from "./types";
-import { ASSET_LABEL } from "./types";
+import type { Features, Member, Team, TeamAsset, TournamentSettings, Uniform } from "./types";
+import { ALL_FEATURES, ASSET_LABEL } from "./types";
 
 export type IssueLevel = "error" | "warning";
 export interface Issue {
@@ -43,8 +43,11 @@ export function isInsured(member: Member): boolean {
   return member.isStudent || member.insuranceOptIn;
 }
 
-/** 選手・役員1人分のチェック */
-export function validateMember(m: Member, s: TournamentSettings): Issue[] {
+/**
+ * 選手・役員1人分のチェック。
+ * f（大会で使う機能）によって必須項目が変わる：パンフレットがある大会だけ、学部・出身高校・身長体重・利き手・写真を必須にする。
+ */
+export function validateMember(m: Member, s: TournamentSettings, f: Features = ALL_FEATURES): Issue[] {
   const issues: Issue[] = [];
   const err = (field: string, message: string) => issues.push({ level: "error", field, message, memberId: m.id });
   const warn = (field: string, message: string) => issues.push({ level: "warning", field, message, memberId: m.id });
@@ -63,7 +66,7 @@ export function validateMember(m: Member, s: TournamentSettings): Issue[] {
   if (!m.birthDate) err("birthDate", "生年月日を入力してください（保険と未成年の確認に使います）。");
   else if (ageOn(m.birthDate, s.startDate) === null) err("birthDate", "生年月日の形式が正しくありません。");
 
-  if (m.name.replace(/[\s　]/g, "").length > s.textLimits.name)
+  if (f.pamphlet && m.name.replace(/[\s　]/g, "").length > s.textLimits.name)
     warn("name", `氏名が${s.textLimits.name}文字を超えています。パンフレットで文字が小さくなる場合があります。`);
 
   if (m.kind === "player") {
@@ -75,16 +78,18 @@ export function validateMember(m: Member, s: TournamentSettings): Issue[] {
     if (m.foreignStatus === "short_term") err("foreignStatus", "短期留学生はエントリーできません。「氏名のみ掲載」に変更してください。");
 
     if (!m.grade) err("grade", "学年を選んでください。");
-    if (!m.faculty.trim()) err("faculty", "学部を入力してください。");
-    else if (m.faculty.length > s.textLimits.faculty) warn("faculty", `学部が${s.textLimits.faculty}文字を超えています。略称をご検討ください。`);
     if (!m.position) err("position", "ポジションを選んでください。");
-    if (!m.highSchool.trim()) err("highSchool", "出身高校を入力してください。");
-    else if (m.highSchool.length > s.textLimits.highSchool) warn("highSchool", `出身高校が${s.textLimits.highSchool}文字を超えています。略称をご検討ください。`);
-    if (m.heightCm === null) err("heightCm", "身長を入力してください。");
-    else if (m.heightCm < 120 || m.heightCm > 230) err("heightCm", "身長は120〜230cmの範囲で入力してください。");
-    if (m.weightKg === null) err("weightKg", "体重を入力してください。");
-    else if (m.weightKg < 35 || m.weightKg > 160) err("weightKg", "体重は35〜160kgの範囲で入力してください。");
-    if (!m.handedness) err("handedness", "利き手を選んでください。");
+    if (f.pamphlet) {
+      if (!m.faculty.trim()) err("faculty", "学部を入力してください。");
+      else if (m.faculty.length > s.textLimits.faculty) warn("faculty", `学部が${s.textLimits.faculty}文字を超えています。略称をご検討ください。`);
+      if (!m.highSchool.trim()) err("highSchool", "出身高校を入力してください。");
+      else if (m.highSchool.length > s.textLimits.highSchool) warn("highSchool", `出身高校が${s.textLimits.highSchool}文字を超えています。略称をご検討ください。`);
+      if (m.heightCm === null) err("heightCm", "身長を入力してください。");
+      if (m.weightKg === null) err("weightKg", "体重を入力してください。");
+      if (!m.handedness) err("handedness", "利き手を選んでください。");
+    }
+    if (m.heightCm !== null && (m.heightCm < 120 || m.heightCm > 230)) err("heightCm", "身長は120〜230cmの範囲で入力してください。");
+    if (m.weightKg !== null && (m.weightKg < 35 || m.weightKg > 160)) err("weightKg", "体重は35〜160kgの範囲で入力してください。");
 
     if (isMinor(m, s) && !m.dopingConsentChecked)
       err("dopingConsentChecked", "未成年の選手です。保護者のドーピング検査同意書を携帯していることを確認し、チェックを入れてください。");
@@ -92,14 +97,16 @@ export function validateMember(m: Member, s: TournamentSettings): Issue[] {
     if (!m.title) err("title", "役職を選んでください。");
   }
 
-  if (m.photoConsent && !m.photoKey) err("photo", "顔写真をアップロードしてください（掲載に同意している場合は必須です）。");
-  if (!m.photoConsent) warn("photoConsent", "写真の掲載に同意していないため、パンフレットには写真なしで掲載されます。");
+  if (f.pamphlet) {
+    if (m.photoConsent && !m.photoKey) err("photo", "顔写真をアップロードしてください（掲載に同意している場合は必須です）。");
+    if (!m.photoConsent) warn("photoConsent", "写真の掲載に同意していないため、パンフレットには写真なしで掲載されます。");
+  }
 
   return issues;
 }
 
 /** チーム全体のチェック（人数・背番号の重複・留学生・ベンチ・引率責任者） */
-export function validateTeam(team: Team, members: Member[], s: TournamentSettings): Issue[] {
+export function validateTeam(team: Team, members: Member[], s: TournamentSettings, f: Features = ALL_FEATURES): Issue[] {
   const issues: Issue[] = [];
   const L = s.limits;
   const players = members.filter((m) => m.kind === "player");
@@ -143,13 +150,15 @@ export function validateTeam(team: Team, members: Member[], s: TournamentSetting
   if (benchStaff.length > L.benchStaffMax)
     issues.push({ level: "error", message: `ベンチ登録の役員は${L.benchStaffMax}名までです（現在${benchStaff.length}名）。` });
 
-  // 引率責任者
+  // 引率責任者（届出がある大会のみ）
   const e = team.escort;
-  if (!e.name.trim()) issues.push({ level: "error", field: "escort", message: "引率責任者を入力してください。" });
+  if (!f.escort) {
+    /* 届出なし */
+  } else if (!e.name.trim()) issues.push({ level: "error", field: "escort", message: "引率責任者を入力してください。" });
   else {
     if (!e.qualified)
       issues.push({ level: "error", field: "escort", message: "引率責任者が「大学の専任教職員、または部長が任命した者」であることを確認し、チェックを入れてください。" });
-    const linked = e.staffMemberId ? staff.find((m) => m.id === e.staffMemberId) : undefined;
+    const linked = e.staffMemberId ? staff.find((m) => m.personId === e.staffMemberId) : undefined;
     if (!linked)
       issues.push({ level: "warning", field: "escort", message: "引率責任者が役員名簿に登録されていません。このままではベンチに入れません。" });
   }
@@ -160,18 +169,23 @@ export function validateTeam(team: Team, members: Member[], s: TournamentSetting
   if (!team.jhaNumber.trim()) issues.push({ level: "error", field: "jha", message: "JHA（日本ハンドボール協会）のチーム登録番号を入力してください。" });
   if (!team.studentFedNumber.trim()) issues.push({ level: "error", field: "fed", message: "全日本学連の登録番号を入力してください。" });
 
-  for (const m of members) issues.push(...validateMember(m, s));
+  for (const m of members) issues.push(...validateMember(m, s, f));
   return issues;
 }
 
-/** 保険加入者数と請求額 */
-export function feeSummary(members: Member[], s: TournamentSettings) {
-  const insured = members.filter((m) => (m.kind === "staff" || m.isEntry) && isInsured(m)).length;
+/**
+ * 保険加入者数と請求額。
+ * opts.insurance=false の大会（リーグなど）は保険料を含めない。opts.entryFee で部ごとの参加料に差し替える。
+ */
+export function feeSummary(members: Member[], s: TournamentSettings, opts: { insurance?: boolean; entryFee?: number | null } = {}) {
+  const withInsurance = opts.insurance ?? true;
+  const insured = withInsurance ? members.filter((m) => (m.kind === "staff" || m.isEntry) && isInsured(m)).length : 0;
+  const entryFee = opts.entryFee ?? s.fees.entry;
   return {
     insured,
     insuranceFee: insured * s.fees.insurancePerPerson,
-    entryFee: s.fees.entry,
-    total: s.fees.entry + insured * s.fees.insurancePerPerson,
+    entryFee,
+    total: entryFee + insured * s.fees.insurancePerPerson,
   };
 }
 
@@ -202,8 +216,9 @@ export function validateSubmission(
   uniforms: Uniform[],
   assets: TeamAsset[],
   s: TournamentSettings,
+  f: Features = ALL_FEATURES,
 ): Issue[] {
-  return [...validateTeam(team, members, s), ...validateUniforms(uniforms), ...validateAssets(assets)];
+  return [...validateTeam(team, members, s, f), ...validateUniforms(uniforms), ...(f.pamphlet ? validateAssets(assets) : [])];
 }
 
 /** 協賛企業名入りユニフォームの着種数と現地払いの金額 */

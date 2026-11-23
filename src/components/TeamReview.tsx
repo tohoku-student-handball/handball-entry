@@ -14,12 +14,15 @@ export function TeamReview({ team, as }: { team: Team; as: "region" | "office" }
   const store = useStore();
   const s = store.settings();
   const members = store.members(team.id);
-  const issues = namedIssues(validateSubmission(team, members, store.uniforms(team.id), store.assets(team.id), s), members);
+  const f = store.features();
+  const oneStep = store.tournament().reviewFlow === "one_step";
+  const division = store.division(team.divisionId);
+  const issues = namedIssues(validateSubmission(team, members, store.uniforms(team.id), store.assets(team.id), s, f), members);
   const [comment, setComment] = useState("");
   const office = as === "office";
   const canApprove = team.status === "submitted";
   const canReturn = team.status === "submitted" || (office && ["region_approved", "office_confirmed"].includes(team.status));
-  const canConfirm = office && team.status === "region_approved";
+  const canConfirm = office && !oneStep && team.status === "region_approved";
   const submitted = ["submitted", "region_approved", "office_confirmed"].includes(team.status);
 
   return (
@@ -27,7 +30,7 @@ export function TeamReview({ team, as }: { team: Team; as: "region" | "office" }
       <section className="card">
         <div className="status-row">
           <div>
-            <p className="muted small">{store.region(team.regionId)?.name}地区</p>
+            <p className="muted small">{division ? division.name : `${store.region(team.regionId)?.name}地区`}</p>
             <h2 className="team-name">
               {store.university(team.universityId)?.name}（{GENDER_LABEL[team.gender]}）
             </h2>
@@ -40,14 +43,14 @@ export function TeamReview({ team, as }: { team: Team; as: "region" | "office" }
 
       {(canApprove || canReturn || canConfirm) && (
         <section className="card stack">
-          <h3>{office ? "事務局の確認" : "地区学連の確認"}</h3>
+          <h3>{oneStep ? "主催者の確認" : office ? "事務局の確認" : "地区学連の確認"}</h3>
           <Field label="コメント（差し戻すときは必須）" hint="チームの担当者に表示され、メールでも通知されます（メール通知は M4 で追加）。">
             <textarea id="review-comment" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} />
           </Field>
           <div className="row">
             {canApprove && (
               <ActionButton onClick={() => store.review(team.id, "approve", comment).then(() => setComment(""))}>
-                承認する
+                {oneStep ? "承認する（受付完了）" : "承認する"}
               </ActionButton>
             )}
             {canConfirm && (
@@ -61,10 +64,11 @@ export function TeamReview({ team, as }: { team: Team; as: "region" | "office" }
               </ActionButton>
             )}
           </div>
-          {office && team.status === "submitted" && <p className="hint">通常は地区学連が承認します。事務局も代わりに承認できます。</p>}
+          {office && !oneStep && team.status === "submitted" && <p className="hint">通常は地区学連が承認します。事務局も代わりに承認できます。</p>}
         </section>
       )}
 
+      {f.paper && (
       <section className="card stack">
         <h3>申込書の原本</h3>
         <p>
@@ -84,6 +88,7 @@ export function TeamReview({ team, as }: { team: Team; as: "region" | "office" }
           )}
         </div>
       </section>
+      )}
 
       {office && <OfficeTools team={team} />}
       <Comments teamId={team.id} />

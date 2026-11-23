@@ -1,12 +1,16 @@
 -- =====================================================================
--- 全日本学生ハンドボール選手権大会 申込システム：データベースの初期設定
+-- 学生ハンドボール 申込・大会運営システム：データベースの設計（全体）
 --
--- Supabase の「SQL Editor」に全文を貼り付けて「Run」で実行します（1回だけ）。
--- 何度実行しても壊れないようにはしていません。2回目以降は実行しないでください。
+-- 使い方：Supabase の「SQL Editor」に全文を貼り付けて「Run」。
+--   ※ このファイルは、既存の表をすべて消してから作り直します。
+--     データが入ったあとの本番では実行しないでください（変更は別の設定文で行う）。
+--   ※ 実行後に supabase/seed.sql（大会と最初の事務局担当者）を実行します。
 --
--- 考え方（docs/03_データ設計.md）
---  * 大会（tournaments）ごとにデータを分ける。
---  * 誰が何を見られるかは memberships（メールアドレス×ロール×対象）で決め、
+-- 考え方（docs/03_データ設計.md・docs/10_リーグ戦対応_要件と設計.md）
+--  * 大会（tournaments）ごとにデータを分ける。全日本学生選手権とリーグ戦は「種類」で切り替える。
+--  * 部員の情報（氏名・写真など）は、大学×男女×年度の「部員名簿」に1回だけ入れる。
+--    各大会では、名簿からエントリーする人と背番号・ベンチを選ぶ（entries）。
+--  * 誰が何を見られるかは memberships（メールアドレス×役割×対象）で決め、
 --    データベース自体の「行レベルセキュリティ（RLS）」で制限する。
 --  * 提出・承認・差し戻し・ロック解除は専用の関数からしか行えない。
 --  * 主要なデータの変更はすべて audit_logs に自動で記録する。
@@ -15,19 +19,81 @@
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------
--- 表
+-- 0. 以前の版（M2）の表・関数を消す（作り直しのため）
+-- ---------------------------------------------------------------------
+drop policy if exists team_files_select on storage.objects;
+drop policy if exists team_files_insert on storage.objects;
+drop policy if exists team_files_update on storage.objects;
+drop policy if exists team_files_delete on storage.objects;
+
+drop table if exists public.audit_logs cascade;
+drop table if exists public.review_comments cascade;
+drop table if exists public.team_assets cascade;
+drop table if exists public.uniforms cascade;
+drop table if exists public.entries cascade;
+drop table if exists public.members cascade;
+drop table if exists public.roster_people cascade;
+drop table if exists public.teams cascade;
+drop table if exists public.memberships cascade;
+drop table if exists public.tournament_universities cascade;
+drop table if exists public.divisions cascade;
+drop table if exists public.universities cascade;
+drop table if exists public.regions cascade;
+drop table if exists public.tournaments cascade;
+
+drop function if exists public.current_email() cascade;
+drop function if exists public.is_office(uuid) cascade;
+drop function if exists public.is_any_office() cascade;
+drop function if exists public.is_tournament_member(uuid) cascade;
+drop function if exists public.is_team_user(uuid) cascade;
+drop function if exists public.is_region_user(uuid) cascade;
+drop function if exists public.can_view_team(uuid) cascade;
+drop function if exists public.team_is_editable(uuid) cascade;
+drop function if exists public.can_edit_team(uuid) cascade;
+drop function if exists public.can_view_university(uuid) cascade;
+drop function if exists public.can_edit_roster(uuid, int) cascade;
+drop function if exists public.team_id_from_path(text) cascade;
+drop function if exists public.uuid_from_path(text) cascade;
+drop function if exists public.can_view_file(text) cascade;
+drop function if exists public.can_edit_file(text) cascade;
+drop function if exists public.touch_updated_at() cascade;
+drop function if exists public.teams_before_insert() cascade;
+drop function if exists public.teams_before_update() cascade;
+drop function if exists public.mark_team_in_progress() cascade;
+drop function if exists public.tu_after_update() cascade;
+drop function if exists public.entries_before_write() cascade;
+drop function if exists public.write_audit_log() cascade;
+drop function if exists public.submit_team(uuid) cascade;
+drop function if exists public.review_team(uuid, text, text) cascade;
+drop function if exists public.unlock_team(uuid, timestamptz, text) cascade;
+drop function if exists public.set_paper_status(uuid, text) cascade;
+drop function if exists public.bootstrap_office(uuid, text, text) cascade;
+
+-- ---------------------------------------------------------------------
+-- 1. 表
 -- ---------------------------------------------------------------------
 
+-- 大会（全日本学生選手権・春季リーグ・秋季リーグなど）
 create table public.tournaments (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  year int not null,
+  short_name text not null default '',
+  -- national：全日本学生選手権など（地区学連→事務局の2段階承認）
+  -- league  ：地区のリーグ戦（主催学連の1段階承認、部・試合あり）
+  kind text not null default 'national' check (kind in ('national', 'league')),
+  -- 年度（部員名簿の年度。例：令和9年度 = 2027）
+  academic_year int not null,
+  season text not null default '' check (season in ('', 'spring', 'autumn')),
+  organizer text not null default '',
+  review_flow text not null default 'two_step' check (review_flow in ('two_step', 'one_step')),
   status text not null default 'preparing'
     check (status in ('preparing', 'open', 'closed', 'finished', 'archived')),
   start_date date not null,
   entry_deadline timestamptz not null,
   -- 金額・人数の上限・画像条件など（src/lib/types.ts の TournamentSettings と同じ形）
   settings jsonb not null default '{}'::jsonb,
+  -- 使う機能 {"pamphlet":true,"insurance":true,"travel":true,"matches":false}
+  features jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -42,6 +108,17 @@ create table public.regions (
   unique (tournament_id, code)
 );
 
+-- 部（リーグの男子1部・男子2部・女子など）
+create table public.divisions (
+  id uuid primary key default gen_random_uuid(),
+  tournament_id uuid not null references public.tournaments on delete cascade,
+  gender text not null check (gender in ('men', 'women')),
+  name text not null,
+  sort_order int not null default 0,
+  entry_fee int,
+  unique (tournament_id, name)
+);
+
 -- 大学（年度をまたいで使う）
 create table public.universities (
   id uuid primary key default gen_random_uuid(),
@@ -50,11 +127,13 @@ create table public.universities (
   created_at timestamptz not null default now()
 );
 
--- その年度に参加する大学と、所属地区
+-- その大会に参加する大学と、所属地区・部
 create table public.tournament_universities (
   tournament_id uuid not null references public.tournaments on delete cascade,
   university_id uuid not null references public.universities on delete restrict,
   region_id uuid not null references public.regions on delete restrict,
+  men_division_id uuid references public.divisions on delete set null,
+  women_division_id uuid references public.divisions on delete set null,
   primary key (tournament_id, university_id)
 );
 
@@ -63,7 +142,7 @@ create table public.memberships (
   id uuid primary key default gen_random_uuid(),
   tournament_id uuid not null references public.tournaments on delete cascade,
   email text not null check (email = lower(email)),
-  role text not null check (role in ('team', 'region', 'office', 'agency')),
+  role text not null check (role in ('team', 'region', 'office', 'agency', 'scorer')),
   university_id uuid references public.universities on delete cascade,
   region_id uuid references public.regions on delete cascade,
   display_name text not null default '',
@@ -72,7 +151,7 @@ create table public.memberships (
   check (
     (role = 'team' and university_id is not null and region_id is null) or
     (role = 'region' and region_id is not null and university_id is null) or
-    (role in ('office', 'agency') and university_id is null and region_id is null)
+    (role in ('office', 'agency', 'scorer') and university_id is null and region_id is null)
   )
 );
 create unique index memberships_unique on public.memberships
@@ -80,12 +159,43 @@ create unique index memberships_unique on public.memberships
    coalesce(region_id, '00000000-0000-0000-0000-000000000000'::uuid));
 create index memberships_email on public.memberships (email);
 
+-- 年度の部員名簿（大学×男女×年度。人に関する情報はここに1回だけ入れる）
+create table public.roster_people (
+  id uuid primary key default gen_random_uuid(),
+  university_id uuid not null references public.universities on delete cascade,
+  gender text not null check (gender in ('men', 'women')),
+  academic_year int not null,
+  kind text not null check (kind in ('player', 'staff')),
+  name text not null default '',
+  kana text not null default '',
+  birth_date date,
+  grade int,
+  faculty text not null default '',
+  position text not null default '',
+  high_school text not null default '',
+  height_cm numeric(5,1),
+  weight_kg numeric(5,1),
+  handedness text not null default '',
+  foreign_status text not null default 'none' check (foreign_status in ('none', 'foreign', 'short_term')),
+  -- 役員：ふだんの役職・学生かどうか
+  default_title text not null default '',
+  is_student boolean not null default false,
+  photo_path text,
+  photo_consent boolean not null default false,
+  doping_consent_checked boolean not null default false,
+  -- 退部などで名簿から外した人（過去の大会の記録は残す）
+  active boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+create index roster_people_univ on public.roster_people (university_id, gender, academic_year);
+
 create table public.teams (
   id uuid primary key default gen_random_uuid(),
   tournament_id uuid not null references public.tournaments on delete cascade,
   university_id uuid not null references public.universities on delete restrict,
   gender text not null check (gender in ('men', 'women')),
   region_id uuid not null references public.regions on delete restrict,
+  division_id uuid references public.divisions on delete set null,
   status text not null default 'not_started'
     check (status in ('not_started', 'in_progress', 'submitted', 'region_approved', 'office_confirmed', 'returned')),
   display_name text not null default '',
@@ -106,33 +216,23 @@ create table public.teams (
 );
 create index teams_region on public.teams (region_id);
 
-create table public.members (
+-- 大会ごとのエントリー（名簿の人を選び、その大会の背番号・ベンチを決める）
+create table public.entries (
   id uuid primary key default gen_random_uuid(),
   team_id uuid not null references public.teams on delete cascade,
-  kind text not null check (kind in ('player', 'staff')),
-  name text not null default '',
-  kana text not null default '',
-  birth_date date,
+  person_id uuid not null references public.roster_people on delete cascade,
+  -- 選手：true = エントリー（背番号あり）、false = 氏名のみ掲載
   is_entry boolean not null default true,
   number int check (number is null or number between 0 and 999),
-  grade int,
-  faculty text not null default '',
-  position text not null default '',
-  high_school text not null default '',
-  height_cm numeric(5,1),
-  weight_kg numeric(5,1),
-  handedness text not null default '',
-  foreign_status text not null default 'none' check (foreign_status in ('none', 'foreign', 'short_term')),
   bench boolean not null default false,
+  -- 役員：この大会での役職・保険の任意加入
   title text not null default '',
-  is_student boolean not null default false,
   insurance_opt_in boolean not null default false,
-  photo_path text,
-  photo_consent boolean not null default false,
-  doping_consent_checked boolean not null default false,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (team_id, person_id)
 );
-create index members_team on public.members (team_id);
+create index entries_team on public.entries (team_id);
+create index entries_person on public.entries (person_id);
 
 create table public.uniforms (
   id uuid primary key default gen_random_uuid(),
@@ -180,15 +280,15 @@ create table public.audit_logs (
 create index audit_logs_at on public.audit_logs (at desc);
 
 -- ---------------------------------------------------------------------
--- 権限を判定する関数
+-- 2. 権限を判定する関数
 -- ---------------------------------------------------------------------
 
-create or replace function public.current_email() returns text
+create function public.current_email() returns text
 language sql stable as $$
   select lower(coalesce(auth.jwt() ->> 'email', ''))
 $$;
 
-create or replace function public.is_office(t uuid) returns boolean
+create function public.is_office(t uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from memberships m
@@ -196,18 +296,18 @@ language sql stable security definer set search_path = public as $$
   )
 $$;
 
-create or replace function public.is_any_office() returns boolean
+create function public.is_any_office() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from memberships m where m.email = current_email() and m.role = 'office')
 $$;
 
-create or replace function public.is_tournament_member(t uuid) returns boolean
+create function public.is_tournament_member(t uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from memberships m where m.tournament_id = t and m.email = current_email())
 $$;
 
 -- そのチームの大学の担当者か
-create or replace function public.is_team_user(team uuid) returns boolean
+create function public.is_team_user(team uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from teams tm join memberships m
@@ -217,7 +317,7 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- そのチームの地区の地区学連担当者か
-create or replace function public.is_region_user(team uuid) returns boolean
+create function public.is_region_user(team uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from teams tm join memberships m
@@ -226,14 +326,14 @@ language sql stable security definer set search_path = public as $$
   )
 $$;
 
-create or replace function public.can_view_team(team uuid) returns boolean
+create function public.can_view_team(team uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select is_team_user(team) or is_region_user(team)
       or exists (select 1 from teams tm where tm.id = team and is_office(tm.tournament_id))
 $$;
 
 -- 締切前（またはロック解除中）で、提出前・差し戻し中のチームか
-create or replace function public.team_is_editable(team uuid) returns boolean
+create function public.team_is_editable(team uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from teams tm join tournaments t on t.id = tm.tournament_id
@@ -243,14 +343,38 @@ language sql stable security definer set search_path = public as $$
   )
 $$;
 
-create or replace function public.can_edit_team(team uuid) returns boolean
+create function public.can_edit_team(team uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select (is_team_user(team) and team_is_editable(team))
       or exists (select 1 from teams tm where tm.id = team and is_office(tm.tournament_id))
 $$;
 
--- 保存ファイルのパス（先頭のフォルダ名がチームID）からチームIDを取り出す
-create or replace function public.team_id_from_path(p text) returns uuid
+-- その大学の部員名簿を見られるか（その大学の担当者・その大学が参加する大会の地区学連・事務局）
+create function public.can_view_university(univ uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from memberships m
+    where m.email = current_email() and m.role = 'team' and m.university_id = univ
+  ) or exists (
+    select 1 from tournament_universities tu join memberships m on m.tournament_id = tu.tournament_id
+    where tu.university_id = univ and m.email = current_email()
+      and (m.role = 'office' or (m.role = 'region' and m.region_id = tu.region_id))
+  )
+$$;
+
+-- その大学のその年度の部員名簿を編集できるか（その年度の大会のチーム担当者）
+create function public.can_edit_roster(univ uuid, yr int) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from memberships m join tournaments t on t.id = m.tournament_id
+    where m.email = current_email() and m.role = 'team' and m.university_id = univ and t.academic_year = yr
+  )
+$$;
+
+-- 保存ファイルのパス（先頭のフォルダ名）から ID を取り出す
+--   チームの画像：{チームID}/{ファイル名}
+--   部員の顔写真：{大学ID}/{ファイル名}
+create function public.uuid_from_path(p text) returns uuid
 language plpgsql immutable as $$
 begin
   return split_part(p, '/', 1)::uuid;
@@ -259,12 +383,28 @@ exception when others then
 end
 $$;
 
+create function public.can_view_file(p text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case
+    when exists (select 1 from teams where id = uuid_from_path(p)) then can_view_team(uuid_from_path(p))
+    when exists (select 1 from universities where id = uuid_from_path(p)) then can_view_university(uuid_from_path(p))
+    else false end
+$$;
+
+create function public.can_edit_file(p text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case
+    when exists (select 1 from teams where id = uuid_from_path(p)) then can_edit_team(uuid_from_path(p))
+    when exists (select 1 from universities where id = uuid_from_path(p)) then exists (
+      select 1 from memberships m where m.email = current_email() and m.role = 'team' and m.university_id = uuid_from_path(p))
+    else false end
+$$;
+
 -- ---------------------------------------------------------------------
--- 自動処理（トリガー）
+-- 3. 自動処理（トリガー）
 -- ---------------------------------------------------------------------
 
--- 更新日時
-create or replace function public.touch_updated_at() returns trigger
+create function public.touch_updated_at() returns trigger
 language plpgsql as $$
 begin
   new.updated_at := now();
@@ -272,21 +412,23 @@ begin
 end
 $$;
 create trigger teams_touch before update on public.teams for each row execute function public.touch_updated_at();
-create trigger members_touch before update on public.members for each row execute function public.touch_updated_at();
+create trigger roster_touch before update on public.roster_people for each row execute function public.touch_updated_at();
+create trigger entries_touch before update on public.entries for each row execute function public.touch_updated_at();
 create trigger uniforms_touch before update on public.uniforms for each row execute function public.touch_updated_at();
 create trigger team_assets_touch before update on public.team_assets for each row execute function public.touch_updated_at();
 
--- チームを作るとき：所属地区は事務局が登録した地区に自動で合わせる
-create or replace function public.teams_before_insert() returns trigger
+-- チームを作るとき：所属地区・部は、事務局が登録した内容に自動で合わせる
+create function public.teams_before_insert() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare r uuid;
+declare tu tournament_universities;
 begin
-  select region_id into r from tournament_universities
+  select * into tu from tournament_universities
    where tournament_id = new.tournament_id and university_id = new.university_id;
-  if r is null then
-    raise exception 'この大学は今年度の参加大学として登録されていません。事務局にお問い合わせください。';
+  if tu.university_id is null then
+    raise exception 'この大学はこの大会の参加大学として登録されていません。主催者にお問い合わせください。';
   end if;
-  new.region_id := r;
+  new.region_id := tu.region_id;
+  new.division_id := case when new.gender = 'men' then tu.men_division_id else tu.women_division_id end;
   new.status := 'not_started';
   new.unlocked_until := null;
   new.submitted_at := null;
@@ -298,7 +440,7 @@ $$;
 create trigger teams_insert before insert on public.teams for each row execute function public.teams_before_insert();
 
 -- チームの更新：状態・ロック・確認済みなどの項目は、専用の関数か事務局しか変えられない
-create or replace function public.teams_before_update() returns trigger
+create function public.teams_before_update() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if coalesce(current_setting('app.trusted', true), '') = 'on' or is_office(old.tournament_id) then
@@ -310,12 +452,12 @@ begin
      or new.registration_confirmed is distinct from old.registration_confirmed
      or new.paper_status is distinct from old.paper_status
      or new.region_id is distinct from old.region_id
+     or new.division_id is distinct from old.division_id
      or new.university_id is distinct from old.university_id
      or new.tournament_id is distinct from old.tournament_id
      or new.gender is distinct from old.gender then
     raise exception 'この項目は変更できません。';
   end if;
-  -- チームが入力を始めたら「入力中」にする
   if old.status = 'not_started' then
     new.status := 'in_progress';
   end if;
@@ -324,8 +466,39 @@ end
 $$;
 create trigger teams_update before update on public.teams for each row execute function public.teams_before_update();
 
--- 名簿などを変えたら、チームを「入力中」にする
-create or replace function public.mark_team_in_progress() returns trigger
+-- 部の割り当てを変えたら、すでにあるチームの部も合わせる
+create function public.tu_after_update() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  perform set_config('app.trusted', 'on', true);
+  update teams set division_id = new.men_division_id
+   where tournament_id = new.tournament_id and university_id = new.university_id and gender = 'men';
+  update teams set division_id = new.women_division_id
+   where tournament_id = new.tournament_id and university_id = new.university_id and gender = 'women';
+  perform set_config('app.trusted', '', true);
+  return new;
+end
+$$;
+create trigger tu_update after update on public.tournament_universities for each row execute function public.tu_after_update();
+
+-- エントリーを変えたら、チームを「入力中」にする。名簿の人と同じ大学・男女のチームか確かめる
+create function public.entries_before_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare ok boolean;
+begin
+  select exists (
+    select 1 from teams tm join tournaments t on t.id = tm.tournament_id
+      join roster_people p on p.id = new.person_id
+    where tm.id = new.team_id and p.university_id = tm.university_id and p.gender = tm.gender
+      and p.academic_year = t.academic_year
+  ) into ok;
+  if not ok then raise exception 'この人は、このチームの部員名簿に入っていません。'; end if;
+  return new;
+end
+$$;
+create trigger entries_check before insert or update on public.entries for each row execute function public.entries_before_write();
+
+create function public.mark_team_in_progress() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare tid uuid := coalesce(new.team_id, old.team_id);
 begin
@@ -335,10 +508,10 @@ begin
   return coalesce(new, old);
 end
 $$;
-create trigger members_progress after insert or update on public.members for each row execute function public.mark_team_in_progress();
+create trigger entries_progress after insert or update on public.entries for each row execute function public.mark_team_in_progress();
 
 -- 変更履歴
-create or replace function public.write_audit_log() returns trigger
+create function public.write_audit_log() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   insert into audit_logs (actor_email, table_name, row_id, action, old_data, new_data)
@@ -353,45 +526,41 @@ begin
   return coalesce(new, old);
 end
 $$;
+create trigger audit_tournaments after insert or update or delete on public.tournaments for each row execute function public.write_audit_log();
 create trigger audit_teams after insert or update or delete on public.teams for each row execute function public.write_audit_log();
-create trigger audit_members after insert or update or delete on public.members for each row execute function public.write_audit_log();
+create trigger audit_roster after insert or update or delete on public.roster_people for each row execute function public.write_audit_log();
+create trigger audit_entries after insert or update or delete on public.entries for each row execute function public.write_audit_log();
 create trigger audit_uniforms after insert or update or delete on public.uniforms for each row execute function public.write_audit_log();
 create trigger audit_team_assets after insert or update or delete on public.team_assets for each row execute function public.write_audit_log();
 create trigger audit_memberships after insert or update or delete on public.memberships for each row execute function public.write_audit_log();
 create trigger audit_review_comments after insert on public.review_comments for each row execute function public.write_audit_log();
-create trigger audit_tournaments after insert or update or delete on public.tournaments for each row execute function public.write_audit_log();
 
 -- ---------------------------------------------------------------------
--- 行レベルセキュリティ（RLS）：誰がどの行を見られる・変えられるか
+-- 4. 行レベルセキュリティ（RLS）：誰がどの行を見られる・変えられるか
 -- ---------------------------------------------------------------------
 
 alter table public.tournaments enable row level security;
 alter table public.regions enable row level security;
+alter table public.divisions enable row level security;
 alter table public.universities enable row level security;
 alter table public.tournament_universities enable row level security;
 alter table public.memberships enable row level security;
+alter table public.roster_people enable row level security;
 alter table public.teams enable row level security;
-alter table public.members enable row level security;
+alter table public.entries enable row level security;
 alter table public.uniforms enable row level security;
 alter table public.team_assets enable row level security;
 alter table public.review_comments enable row level security;
 alter table public.audit_logs enable row level security;
 
--- 大会・地区：その大会に所属している人は閲覧可、事務局は変更可
 create policy tournaments_select on public.tournaments for select to authenticated using (is_tournament_member(id));
 create policy tournaments_update on public.tournaments for update to authenticated using (is_office(id)) with check (is_office(id));
 create policy regions_select on public.regions for select to authenticated using (is_tournament_member(tournament_id));
 create policy regions_write on public.regions for all to authenticated using (is_office(tournament_id)) with check (is_office(tournament_id));
+create policy divisions_select on public.divisions for select to authenticated using (is_tournament_member(tournament_id));
+create policy divisions_write on public.divisions for all to authenticated using (is_office(tournament_id)) with check (is_office(tournament_id));
 
--- 大学：自分に関係する大学（担当大学・自地区・事務局は全部）
-create policy universities_select on public.universities for select to authenticated using (
-  is_any_office()
-  or exists (select 1 from memberships m where m.email = current_email() and m.university_id = universities.id)
-  or exists (
-    select 1 from tournament_universities tu join memberships m
-      on m.tournament_id = tu.tournament_id and m.region_id = tu.region_id
-    where tu.university_id = universities.id and m.email = current_email() and m.role = 'region')
-);
+create policy universities_select on public.universities for select to authenticated using (is_any_office() or can_view_university(id));
 create policy universities_write on public.universities for all to authenticated using (is_any_office()) with check (is_any_office());
 
 create policy tu_select on public.tournament_universities for select to authenticated using (
@@ -401,11 +570,19 @@ create policy tu_select on public.tournament_universities for select to authenti
 );
 create policy tu_write on public.tournament_universities for all to authenticated using (is_office(tournament_id)) with check (is_office(tournament_id));
 
--- 所属：自分の所属は自分で見られる。事務局は全員分を管理
 create policy memberships_select on public.memberships for select to authenticated using (email = current_email() or is_office(tournament_id));
 create policy memberships_write on public.memberships for all to authenticated using (is_office(tournament_id)) with check (is_office(tournament_id));
 
--- チーム
+-- 部員名簿：見られるのはその大学の関係者。編集はその年度の大学の担当者
+create policy roster_select on public.roster_people for select to authenticated using (can_view_university(university_id));
+create policy roster_insert on public.roster_people for insert to authenticated with check (can_edit_roster(university_id, academic_year));
+create policy roster_update on public.roster_people for update to authenticated
+  using (can_edit_roster(university_id, academic_year)) with check (can_edit_roster(university_id, academic_year));
+-- 削除は、どの大会にもエントリーしていない人だけ（エントリー済みの人は「名簿から外す」= active=false）
+create policy roster_delete on public.roster_people for delete to authenticated using (
+  can_edit_roster(university_id, academic_year) and not exists (select 1 from entries e where e.person_id = roster_people.id)
+);
+
 create policy teams_select on public.teams for select to authenticated using (can_view_team(id));
 create policy teams_insert on public.teams for insert to authenticated with check (
   is_office(tournament_id)
@@ -417,11 +594,10 @@ create policy teams_insert on public.teams for insert to authenticated with chec
 create policy teams_update on public.teams for update to authenticated using (can_edit_team(id)) with check (can_edit_team(id));
 create policy teams_delete on public.teams for delete to authenticated using (is_office(tournament_id));
 
--- 名簿・ユニフォーム・チーム画像
-create policy members_select on public.members for select to authenticated using (can_view_team(team_id));
-create policy members_insert on public.members for insert to authenticated with check (can_edit_team(team_id));
-create policy members_update on public.members for update to authenticated using (can_edit_team(team_id)) with check (can_edit_team(team_id));
-create policy members_delete on public.members for delete to authenticated using (can_edit_team(team_id));
+create policy entries_select on public.entries for select to authenticated using (can_view_team(team_id));
+create policy entries_insert on public.entries for insert to authenticated with check (can_edit_team(team_id));
+create policy entries_update on public.entries for update to authenticated using (can_edit_team(team_id)) with check (can_edit_team(team_id));
+create policy entries_delete on public.entries for delete to authenticated using (can_edit_team(team_id));
 
 create policy uniforms_select on public.uniforms for select to authenticated using (can_view_team(team_id));
 create policy uniforms_insert on public.uniforms for insert to authenticated with check (can_edit_team(team_id));
@@ -433,23 +609,20 @@ create policy assets_insert on public.team_assets for insert to authenticated wi
 create policy assets_update on public.team_assets for update to authenticated using (can_edit_team(team_id)) with check (can_edit_team(team_id));
 create policy assets_delete on public.team_assets for delete to authenticated using (can_edit_team(team_id));
 
--- コメント：閲覧はチームを見られる人。書き込みは関数経由のみ
 create policy comments_select on public.review_comments for select to authenticated using (can_view_team(team_id));
-
--- 変更履歴：事務局のみ閲覧
 create policy audit_select on public.audit_logs for select to authenticated using (is_any_office());
 
 -- ---------------------------------------------------------------------
--- 提出・承認・差し戻し・ロック解除（専用の関数）
+-- 5. 提出・承認・差し戻し・ロック解除（専用の関数）
 -- ---------------------------------------------------------------------
 
 -- チームが提出する。人数・背番号の重複・留学生の上限はここでも確認する
-create or replace function public.submit_team(p_team uuid) returns void
+create function public.submit_team(p_team uuid) returns void
 language plpgsql security definer set search_path = public as $$
 declare
   tm teams;
   s jsonb;
-  n_entry int; n_staff int; n_foreign int; n_foreign_bench int; n_bench_p int; n_bench_s int; n_short int; n_dup int;
+  n_entry int; n_staff int; n_foreign int; n_foreign_bench int; n_bench_p int; n_bench_s int; n_short int; n_dup int; n_bad_num int;
   problems text[] := '{}';
 begin
   select * into tm from teams where id = p_team for update;
@@ -461,18 +634,21 @@ begin
   end if;
   select settings -> 'limits' into s from tournaments where id = tm.tournament_id;
 
-  select count(*) filter (where kind = 'player' and is_entry),
-         count(*) filter (where kind = 'staff'),
-         count(*) filter (where kind = 'player' and is_entry and foreign_status = 'foreign'),
-         count(*) filter (where kind = 'player' and is_entry and foreign_status = 'foreign' and bench),
-         count(*) filter (where kind = 'player' and is_entry and bench),
-         count(*) filter (where kind = 'staff' and bench),
-         count(*) filter (where kind = 'player' and is_entry and foreign_status = 'short_term')
-    into n_entry, n_staff, n_foreign, n_foreign_bench, n_bench_p, n_bench_s, n_short
-    from members where team_id = p_team;
+  select count(*) filter (where p.kind = 'player' and e.is_entry),
+         count(*) filter (where p.kind = 'staff'),
+         count(*) filter (where p.kind = 'player' and e.is_entry and p.foreign_status = 'foreign'),
+         count(*) filter (where p.kind = 'player' and e.is_entry and p.foreign_status = 'foreign' and e.bench),
+         count(*) filter (where p.kind = 'player' and e.is_entry and e.bench),
+         count(*) filter (where p.kind = 'staff' and e.bench),
+         count(*) filter (where p.kind = 'player' and e.is_entry and p.foreign_status = 'short_term'),
+         count(*) filter (where p.kind = 'player' and e.is_entry
+                          and (e.number is null or e.number < coalesce((s ->> 'numberMin')::int, 1) or e.number > coalesce((s ->> 'numberMax')::int, 99)))
+    into n_entry, n_staff, n_foreign, n_foreign_bench, n_bench_p, n_bench_s, n_short, n_bad_num
+    from entries e join roster_people p on p.id = e.person_id where e.team_id = p_team;
   select count(*) into n_dup from (
-    select number from members where team_id = p_team and kind = 'player' and is_entry and number is not null
-    group by number having count(*) > 1) d;
+    select e.number from entries e join roster_people p on p.id = e.person_id
+    where e.team_id = p_team and p.kind = 'player' and e.is_entry and e.number is not null
+    group by e.number having count(*) > 1) d;
 
   if n_entry = 0 or n_entry > coalesce((s ->> 'playerEntryMax')::int, 25) then problems := array_append(problems, 'エントリー選手の人数'); end if;
   if n_staff = 0 or n_staff > coalesce((s ->> 'staffMax')::int, 6) then problems := array_append(problems, '役員の人数'); end if;
@@ -482,10 +658,7 @@ begin
   if n_bench_s > coalesce((s ->> 'benchStaffMax')::int, 5) then problems := array_append(problems, 'ベンチ登録の役員の人数'); end if;
   if n_short > 0 then problems := array_append(problems, '短期留学生のエントリー'); end if;
   if n_dup > 0 then problems := array_append(problems, '背番号の重複'); end if;
-  if exists (select 1 from members where team_id = p_team and kind = 'player' and is_entry
-             and (number is null or number < coalesce((s ->> 'numberMin')::int, 1) or number > coalesce((s ->> 'numberMax')::int, 99))) then
-    problems := array_append(problems, '背番号の範囲');
-  end if;
+  if n_bad_num > 0 then problems := array_append(problems, '背番号の範囲'); end if;
   if array_length(problems, 1) > 0 then
     raise exception '提出できません。次の点を確認してください：%', array_to_string(problems, '、');
   end if;
@@ -498,24 +671,28 @@ begin
 end
 $$;
 
--- 地区学連・事務局の確認：approve（地区承認）／return（差し戻し）／confirm（事務局確認）
-create or replace function public.review_team(p_team uuid, p_action text, p_comment text default '') returns void
+-- 確認：approve（承認）／return（差し戻し）／confirm（事務局確認）
+--  2段階（全日本）：提出 →[地区学連が approve]→ 地区承認済 →[事務局が confirm]→ 事務局確認済
+--  1段階（リーグ）：提出 →[主催者（事務局）が approve]→ 事務局確認済
+create function public.review_team(p_team uuid, p_action text, p_comment text default '') returns void
 language plpgsql security definer set search_path = public as $$
 declare
   tm teams;
+  flow text;
   office boolean;
   region boolean;
   new_status text;
 begin
   select * into tm from teams where id = p_team for update;
   if tm.id is null then raise exception 'チームが見つかりません。'; end if;
+  select review_flow into flow from tournaments where id = tm.tournament_id;
   office := is_office(tm.tournament_id);
-  region := is_region_user(p_team);
+  region := flow = 'two_step' and is_region_user(p_team);
   if not (office or region) then raise exception 'このチームを確認する権限がありません。'; end if;
 
   if p_action = 'approve' then
     if tm.status <> 'submitted' then raise exception '提出済みのチームだけ承認できます。'; end if;
-    new_status := 'region_approved';
+    new_status := case when flow = 'one_step' then 'office_confirmed' else 'region_approved' end;
   elsif p_action = 'return' then
     if tm.status not in ('submitted', 'region_approved', 'office_confirmed') then
       raise exception '提出済みのチームだけ差し戻せます。';
@@ -548,7 +725,7 @@ end
 $$;
 
 -- 事務局：締切後のロックを一時的に解除する（p_until が null なら解除を取り消す）
-create or replace function public.unlock_team(p_team uuid, p_until timestamptz, p_reason text) returns void
+create function public.unlock_team(p_team uuid, p_until timestamptz, p_reason text) returns void
 language plpgsql security definer set search_path = public as $$
 declare tm teams;
 begin
@@ -563,7 +740,7 @@ end
 $$;
 
 -- 申込書原本の郵送・到着の記録（チーム：郵送済にする／地区学連・事務局：到着確認）
-create or replace function public.set_paper_status(p_team uuid, p_status text) returns void
+create function public.set_paper_status(p_team uuid, p_status text) returns void
 language plpgsql security definer set search_path = public as $$
 declare tm teams;
 begin
@@ -580,8 +757,8 @@ begin
 end
 $$;
 
--- 最初の事務局担当者を登録する（設定のときに1回だけ使う。事務局が1人でもいれば使えない）
-create or replace function public.bootstrap_office(p_tournament uuid, p_email text, p_name text default '') returns void
+-- 最初の事務局担当者を登録する（設定のときに使う。その大会に事務局が1人でもいれば使えない）
+create function public.bootstrap_office(p_tournament uuid, p_email text, p_name text default '') returns void
 language plpgsql security definer set search_path = public as $$
 begin
   if exists (select 1 from memberships where tournament_id = p_tournament and role = 'office') then
@@ -590,26 +767,36 @@ begin
   insert into memberships (tournament_id, email, role, display_name) values (p_tournament, lower(trim(p_email)), 'office', p_name);
 end
 $$;
-revoke execute on function public.bootstrap_office(uuid, text, text) from public, anon, authenticated;
-
-grant execute on function public.submit_team(uuid) to authenticated;
-grant execute on function public.review_team(uuid, text, text) to authenticated;
-grant execute on function public.unlock_team(uuid, timestamptz, text) to authenticated;
-grant execute on function public.set_paper_status(uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------
--- 写真の保存場所（Storage）
--- 保存先：team-files/{チームID}/{ファイル名}
+-- 6. 写真の保存場所（Storage）
+--   チームの画像：team-files/{チームID}/{ファイル名}
+--   部員の顔写真：team-files/{大学ID}/{ファイル名}
 -- ---------------------------------------------------------------------
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('team-files', 'team-files', false, 20971520, array['image/jpeg', 'image/png']);
+values ('team-files', 'team-files', false, 20971520, array['image/jpeg', 'image/png'])
+on conflict (id) do nothing;
 
 create policy team_files_select on storage.objects for select to authenticated
-  using (bucket_id = 'team-files' and can_view_team(team_id_from_path(name)));
+  using (bucket_id = 'team-files' and can_view_file(name));
 create policy team_files_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'team-files' and can_edit_team(team_id_from_path(name)));
+  with check (bucket_id = 'team-files' and can_edit_file(name));
 create policy team_files_update on storage.objects for update to authenticated
-  using (bucket_id = 'team-files' and can_edit_team(team_id_from_path(name)));
+  using (bucket_id = 'team-files' and can_edit_file(name));
 create policy team_files_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'team-files' and can_edit_team(team_id_from_path(name)));
+  using (bucket_id = 'team-files' and can_edit_file(name));
+
+-- ---------------------------------------------------------------------
+-- 7. 使う許可（ログインした人だけ。ログインしていない人には表を使わせない）
+-- ---------------------------------------------------------------------
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+grant execute on all functions in schema public to authenticated;
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
+alter default privileges in schema public grant usage, select on sequences to authenticated;
+alter default privileges in schema public grant execute on functions to authenticated;
+revoke execute on function public.bootstrap_office(uuid, text, text) from public, anon, authenticated;
+revoke all on all tables in schema public from anon;

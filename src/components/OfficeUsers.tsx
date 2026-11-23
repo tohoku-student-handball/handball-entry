@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useStore } from "@/lib/store";
-import { ROLE_LABEL, type Membership, type Role } from "@/lib/types";
+import { GENDER_LABEL, ROLE_LABEL, type Gender, type Membership, type Role } from "@/lib/types";
 import { ConfirmButton } from "./ConfirmButton";
 import { Field } from "./Field";
 import { ActionButton, formatDateTime } from "./ui";
@@ -13,6 +13,13 @@ export function OfficeUsers() {
   const [uniName, setUniName] = useState("");
   const [uniKana, setUniKana] = useState("");
   const [uniRegion, setUniRegion] = useState(regions[0]?.id ?? "");
+  const tour = store.tournament();
+  const isLeague = tour.kind === "league";
+  const menDivs = store.divisions("men");
+  const womenDivs = store.divisions("women");
+  const [uniMen, setUniMen] = useState("");
+  const [uniWomen, setUniWomen] = useState("");
+  const roleOptions: Role[] = tour.reviewFlow === "two_step" ? ["team", "region", "office"] : ["team", "office"];
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -29,7 +36,9 @@ export function OfficeUsers() {
     <div className="stack">
       <section className="card stack">
         <h3>参加大学の登録</h3>
-        <p className="hint">今年度に参加する大学と、その所属地区を登録します。チームの担当者は、ここで登録した大学のチームだけを作れます。</p>
+        <p className="hint">
+          この大会に参加する大学と、その所属{isLeague ? "の部" : "地区"}を登録します。チームの担当者は、ここで登録した大学のチームだけを作れます。
+        </p>
         <div className="grid3 wide-first">
           <Field label="大学名">
             <input id="uni-name" value={uniName} onChange={(e) => setUniName(e.target.value)} placeholder="例：東北学院大学" />
@@ -37,18 +46,28 @@ export function OfficeUsers() {
           <Field label="ふりがな（カタカナ）">
             <input id="uni-kana" value={uniKana} onChange={(e) => setUniKana(e.target.value)} placeholder="例：トウホクガクインダイガク" />
           </Field>
-          <Field label="所属地区">
-            <select id="uni-region" value={uniRegion} onChange={(e) => setUniRegion(e.target.value)}>
-              {regions.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
-          </Field>
+          {regions.length > 1 ? (
+            <Field label="所属地区">
+              <select id="uni-region" value={uniRegion} onChange={(e) => setUniRegion(e.target.value)}>
+                {regions.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <span />
+          )}
         </div>
+        {isLeague && (
+          <div className="grid2">
+            <DivisionSelect id="uni-men-div" label="男子の部" value={uniMen} options={menDivs} onChange={setUniMen} />
+            <DivisionSelect id="uni-women-div" label="女子の部" value={uniWomen} options={womenDivs} onChange={setUniWomen} />
+          </div>
+        )}
         <div>
           <ActionButton
             onClick={async () => {
-              await store.addUniversity(uniName, uniKana, uniRegion);
+              await store.addUniversity(uniName, uniKana, uniRegion || regions[0]?.id, uniMen || null, uniWomen || null);
               setUniName("");
               setUniKana("");
             }}
@@ -56,18 +75,52 @@ export function OfficeUsers() {
             大学を登録する
           </ActionButton>
         </div>
-        <details>
+        <details open={isLeague}>
           <summary>登録済みの大学（{tus.length}校）</summary>
-          <ul className="plain-list small">
-            {tus
-              .map((tu) => ({ tu, name: store.university(tu.universityId)?.name ?? "" }))
-              .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-              .map(({ tu, name }) => (
-                <li key={tu.universityId}>
-                  {name}（{store.region(tu.regionId)?.name}）
-                </li>
-              ))}
-          </ul>
+          {isLeague ? (
+            <div className="table-wrap">
+              <table className="grid-table">
+                <thead>
+                  <tr><th>大学</th><th>男子の部</th><th>女子の部</th></tr>
+                </thead>
+                <tbody>
+                  {tus
+                    .map((tu) => ({ tu, name: store.university(tu.universityId)?.name ?? "" }))
+                    .sort((a, b) => a.name.localeCompare(b.name, "ja"))
+                    .map(({ tu, name }) => (
+                      <tr key={tu.universityId}>
+                        <td>{name}</td>
+                        {(["men", "women"] as Gender[]).map((g) => (
+                          <td key={g}>
+                            <select
+                              aria-label={`${name}の${GENDER_LABEL[g]}の部`}
+                              value={(g === "men" ? tu.menDivisionId : tu.womenDivisionId) ?? ""}
+                              onChange={(e) => store.setUniversityDivision(tu.universityId, g, e.target.value || null)}
+                            >
+                              <option value="">参加しない</option>
+                              {store.divisions(g).map((d) => (
+                                <option key={d.id} value={d.id}>{d.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <ul className="plain-list small">
+              {tus
+                .map((tu) => ({ tu, name: store.university(tu.universityId)?.name ?? "" }))
+                .sort((a, b) => a.name.localeCompare(b.name, "ja"))
+                .map(({ tu, name }) => (
+                  <li key={tu.universityId}>
+                    {name}（{store.region(tu.regionId)?.name}）
+                  </li>
+                ))}
+            </ul>
+          )}
         </details>
       </section>
 
@@ -86,7 +139,7 @@ export function OfficeUsers() {
           </Field>
           <Field label="役割">
             <select id="member-role" value={role} onChange={(e) => { setRole(e.target.value as Role); setTarget(""); }}>
-              {(["team", "region", "office"] as Role[]).map((r) => (
+              {roleOptions.map((r) => (
                 <option key={r} value={r}>{ROLE_LABEL[r]}</option>
               ))}
             </select>
@@ -162,5 +215,18 @@ export function OfficeUsers() {
         </div>
       </section>
     </div>
+  );
+}
+
+function DivisionSelect({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: { id: string; name: string }[]; onChange: (v: string) => void }) {
+  return (
+    <Field label={label}>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">参加しない</option>
+        {options.map((d) => (
+          <option key={d.id} value={d.id}>{d.name}</option>
+        ))}
+      </select>
+    </Field>
   );
 }

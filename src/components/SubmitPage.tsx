@@ -13,7 +13,9 @@ import { ActionButton, LockBanner, StatusBadge, namedIssues } from "./ui";
 export function SubmitPage({ team }: { team: Team }) {
   const store = useStore();
   const s = store.settings();
-  const issues = validateSubmission(team, store.members(team.id), store.uniforms(team.id), store.assets(team.id), s);
+  const f = store.features();
+  const oneStep = store.tournament().reviewFlow === "one_step";
+  const issues = validateSubmission(team, store.members(team.id), store.uniforms(team.id), store.assets(team.id), s, f);
   const errors = issues.filter((i) => i.level === "error");
   const locked = lockReason(team, s);
   const submitted = ["submitted", "region_approved", "office_confirmed"].includes(team.status);
@@ -38,9 +40,9 @@ export function SubmitPage({ team }: { team: Team }) {
             ) : (
               <div className="stack">
                 {issues.length > 0 && <IssueList issues={named} />}
-                <p>下の申込内容を確認し、間違いがなければ提出してください。提出すると、所属地区の地区学連に届きます。</p>
+                <p>下の申込内容を確認し、間違いがなければ提出してください。提出すると、{oneStep ? "主催者" : "所属地区の地区学連"}に届きます。</p>
                 <p className="notice">
-                  <strong>提出後は、地区学連の確認が終わるまで内容を変更できません。</strong>
+                  <strong>提出後は、確認が終わるまで内容を変更できません。</strong>
                   背番号は申込後に変更できません。
                 </p>
                 <label className="check">
@@ -57,13 +59,14 @@ export function SubmitPage({ team }: { team: Team }) {
         {!submitted && <LockBanner reason={locked} />}
         {submitted && (
           <p>
-            {team.status === "submitted" && "提出済みです。地区学連の確認をお待ちください。"}
+            {team.status === "submitted" && `提出済みです。${oneStep ? "主催者" : "地区学連"}の確認をお待ちください。`}
             {team.status === "region_approved" && "地区学連が承認しました。事務局の確認をお待ちください。"}
             {team.status === "office_confirmed" && "事務局の確認が終わりました。申込は完了です。"}
           </p>
         )}
       </section>
 
+      {f.paper ? (
       <section className="card">
         <h3>申込書（様式Ⅰ・Ⅲ）の原本</h3>
         <p>
@@ -90,6 +93,12 @@ export function SubmitPage({ team }: { team: Team }) {
         </div>
         <p className="hint">原本の扱い（郵送か、押印したPDFのアップロードか）は全日本学連と調整中です。決まり次第この画面を変更します。</p>
       </section>
+      ) : (
+        <section className="card">
+          <h3>申込内容の控え</h3>
+          <a className="btn" href={href(team.gender, "print")}>申込内容を表示・印刷する</a>
+        </section>
+      )}
 
       <Comments teamId={team.id} />
       <h2 className="section-title">申込内容</h2>

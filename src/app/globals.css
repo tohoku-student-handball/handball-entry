@@ -221,7 +221,7 @@ input.short { max-width: 8em; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .actions.sticky {
-  position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; margin: 0 -4px;
+  position: sticky; bottom: 0; z-index: 5; background: var(--bg); padding: 12px 0; margin: 0 -4px;
   border-top: 1px solid var(--line);
 }
 
@@ -359,3 +359,30 @@ details summary { cursor: pointer; color: var(--primary); }
   .sheet { border: none; padding: 0; overflow: visible; }
   .page-break { break-before: page; }
 }
+
+/* ---- M2.5 で追加 ---- */
+.min0 { min-width: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tour-switch { display: block; margin-bottom: 2px; }
+.tour-switch select {
+  width: auto; max-width: 100%; padding: 4px 28px 4px 8px; font-size: 0.82rem; border-radius: 6px;
+  background-color: var(--primary-soft); color: var(--text); border: none;
+}
+.entry-table td { vertical-align: middle; }
+.entry-table td:first-child { white-space: normal; min-width: 8em; }
+.entry-table select { width: auto; padding: 6px 8px; font-size: 0.9rem; }
+.entry-table input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary); }
+.entry-table .c { text-align: center; }
+.row-off td { color: var(--muted); }
+.row-off td:first-child a { color: var(--muted); }
+.num-input { width: 4.5em !important; padding: 6px 8px !important; text-align: center; font-variant-numeric: tabular-nums; }
+.num-input.dup { border-color: var(--error); background: var(--error-soft); }
+/* 2列・3列の中身が列の幅を押し広げないようにする（日時の入力欄など） */
+.grid2 > *, .grid3 > * { min-width: 0; }
+input[type="date"], input[type="datetime-local"] { min-width: 0; max-width: 100%; }
+@media (max-width: 480px) { .grid2.stack-phone { grid-template-columns: 1fr; } }
+/* エントリー表をスマホの幅に収める */
+.entry-table th, .entry-table td { padding: 6px 5px; }
+.entry-table td:first-child { min-width: 6em; max-width: 9em; }
+.entry-table select { max-width: 8em; padding: 6px 4px; font-size: 0.85rem; }
+.entry-table .num-input { width: 3.6em !important; padding: 6px 4px !important; }

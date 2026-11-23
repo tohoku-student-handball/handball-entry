@@ -14,11 +14,63 @@ export type TeamStatus =
 export const TEAM_STATUS_LABEL: Record<TeamStatus, string> = {
   not_started: "未着手",
   in_progress: "入力中",
-  submitted: "提出済（地区学連の確認待ち）",
+  submitted: "提出済（確認待ち）",
   region_approved: "地区承認済",
-  office_confirmed: "事務局確認済",
+  office_confirmed: "確認済（受付完了）",
   returned: "差し戻し",
 };
+
+export type TournamentKind = "national" | "league";
+export const TOURNAMENT_KIND_LABEL: Record<TournamentKind, string> = { national: "全日本・全国大会", league: "リーグ戦" };
+
+/** 大会ごとに使う機能 */
+export interface Features {
+  /** パンフレット（顔写真・集合写真・ロゴ） */
+  pamphlet: boolean;
+  /** 傷害保険 */
+  insurance: boolean;
+  /** 交通・宿泊・弁当 */
+  travel: boolean;
+  /** 試合日程・結果・順位表 */
+  matches: boolean;
+  /** 引率責任者の届出 */
+  escort: boolean;
+  /** 紙の申込書（原本）の郵送 */
+  paper: boolean;
+}
+export const ALL_FEATURES: Features = { pamphlet: true, insurance: true, travel: true, matches: false, escort: true, paper: true };
+export const FEATURE_LABEL: Record<keyof Features, string> = {
+  pamphlet: "パンフレット（顔写真・集合写真・ロゴ）",
+  insurance: "傷害保険",
+  travel: "交通・宿泊・弁当",
+  matches: "試合日程・結果・順位表",
+  escort: "引率責任者の届出",
+  paper: "申込書原本の郵送",
+};
+
+/** 大会（全日本学生選手権・春季リーグなど） */
+export interface TournamentInfo {
+  id: string;
+  name: string;
+  shortName: string;
+  kind: TournamentKind;
+  /** 年度（部員名簿の年度） */
+  academicYear: number;
+  season: "" | "spring" | "autumn";
+  organizer: string;
+  /** two_step：地区学連→事務局 ／ one_step：主催者のみ */
+  reviewFlow: "two_step" | "one_step";
+  features: Features;
+}
+
+/** 部（リーグの男子1部など） */
+export interface Division {
+  id: string;
+  gender: Gender;
+  name: string;
+  sortOrder: number;
+  entryFee: number | null;
+}
 
 /** 画像の条件（大会の設定で変更可） */
 export interface ImageRule {
@@ -74,12 +126,13 @@ export interface Region {
   sortOrder: number;
 }
 
-export type Role = "team" | "region" | "office" | "agency";
+export type Role = "team" | "region" | "office" | "agency" | "scorer";
 export const ROLE_LABEL: Record<Role, string> = {
   team: "チーム担当者",
   region: "地区学連",
-  office: "事務局",
+  office: "事務局（主催者）",
   agency: "旅行社",
+  scorer: "記録員",
 };
 
 /** 所属（ログインしたメールアドレスごとの役割） */
@@ -97,6 +150,8 @@ export interface Membership {
 export interface TournamentUniversity {
   universityId: string;
   regionId: string;
+  menDivisionId: string | null;
+  womenDivisionId: string | null;
 }
 
 export type UniformUse = "CP" | "GK";
@@ -162,6 +217,8 @@ export interface Team {
   universityId: string;
   gender: Gender;
   regionId: string;
+  /** 部（リーグのみ） */
+  divisionId: string | null;
   status: TeamStatus;
   displayName: string;
   contactName: string;
@@ -201,8 +258,55 @@ export const POSITION_LABEL: Record<string, string> = {
 export const HANDEDNESS = ["右", "左", "両"] as const;
 export const STAFF_TITLES = ["部長", "監督", "コーチ", "トレーナー", "マネージャー", "その他"] as const;
 
+/** 年度の部員名簿の1人（人に関する情報。全大会で共通） */
+export interface RosterPerson {
+  id: string;
+  universityId: string;
+  gender: Gender;
+  academicYear: number;
+  kind: MemberKind;
+  name: string;
+  kana: string;
+  birthDate: string;
+  grade: number | null;
+  faculty: string;
+  position: string;
+  highSchool: string;
+  heightCm: number | null;
+  weightKg: number | null;
+  handedness: string;
+  foreignStatus: ForeignStatus;
+  /** 役員：ふだんの役職 */
+  defaultTitle: string;
+  /** 役員：学生かどうか */
+  isStudent: boolean;
+  photoKey: string | null;
+  photoConsent: boolean;
+  dopingConsentChecked: boolean;
+  /** 名簿に載っているか（退部などで外した人は false） */
+  active: boolean;
+  updatedAt: string;
+}
+
+/** 大会ごとのエントリー（名簿の人を選び、その大会の背番号・ベンチを決める） */
+export interface Entry {
+  id: string;
+  teamId: string;
+  personId: string;
+  isEntry: boolean;
+  number: number | null;
+  bench: boolean;
+  title: string;
+  insuranceOptIn: boolean;
+}
+
+/**
+ * 画面とルール判定で使う「名簿＋エントリー」を合わせた形。
+ * id はエントリーの id、personId は名簿の人の id。
+ */
 export interface Member {
   id: string;
+  personId: string;
   teamId: string;
   kind: MemberKind;
   name: string;
@@ -233,9 +337,74 @@ export interface Member {
   updatedAt: string;
 }
 
+export function emptyPerson(universityId: string, gender: Gender, academicYear: number, kind: MemberKind): RosterPerson {
+  return {
+    id: "",
+    universityId,
+    gender,
+    academicYear,
+    kind,
+    name: "",
+    kana: "",
+    birthDate: "",
+    grade: null,
+    faculty: "",
+    position: "",
+    highSchool: "",
+    heightCm: null,
+    weightKg: null,
+    handedness: "",
+    foreignStatus: "none",
+    defaultTitle: kind === "staff" ? "監督" : "",
+    isStudent: false,
+    photoKey: null,
+    photoConsent: false,
+    dopingConsentChecked: false,
+    active: true,
+    updatedAt: "",
+  };
+}
+
+/** 名簿の人とエントリーを合わせる */
+export function toMember(p: RosterPerson, e: Entry): Member {
+  return {
+    id: e.id,
+    personId: p.id,
+    teamId: e.teamId,
+    kind: p.kind,
+    name: p.name,
+    kana: p.kana,
+    birthDate: p.birthDate,
+    isEntry: e.isEntry,
+    number: e.number,
+    grade: p.grade,
+    faculty: p.faculty,
+    position: p.position,
+    highSchool: p.highSchool,
+    heightCm: p.heightCm,
+    weightKg: p.weightKg,
+    handedness: p.handedness,
+    foreignStatus: p.foreignStatus,
+    bench: e.bench,
+    title: e.title || p.defaultTitle,
+    isStudent: p.isStudent,
+    insuranceOptIn: e.insuranceOptIn,
+    photoKey: p.photoKey,
+    photoConsent: p.photoConsent,
+    dopingConsentChecked: p.dopingConsentChecked,
+    updatedAt: p.updatedAt,
+  };
+}
+
+/** 名簿の人を、ルール判定用に「エントリーしたもの」として扱う（名簿画面のチェック用） */
+export function personAsMember(p: RosterPerson): Member {
+  return toMember(p, { id: p.id, teamId: "", personId: p.id, isEntry: true, number: null, bench: false, title: "", insuranceOptIn: false });
+}
+
 export function emptyMember(teamId: string, kind: MemberKind): Member {
   return {
     id: "",
+    personId: "",
     teamId,
     kind,
     name: "",
