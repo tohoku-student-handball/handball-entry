@@ -4,7 +4,7 @@ import type { LiveStore } from "@/lib/liveStore";
 import { toMessage } from "@/lib/store";
 import { Field } from "./Field";
 
-/** ログイン画面：メールアドレスを入れると、ログイン用のリンクと6桁のコードが届く */
+/** ログイン画面：メールアドレスを入れると、ログイン用のリンクと確認コードが届く */
 export function Login({ store }: { store: LiveStore }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
@@ -60,9 +60,9 @@ export function Login({ store }: { store: LiveStore }) {
               {email} にメールを送りました。
             </p>
             <p>
-              メールの<strong>「ログインする」リンクを開く</strong>か、メールに書かれた<strong>6桁のコード</strong>を下に入力してください。
+              メールの<strong>「ログインする」リンクを開く</strong>か、メールに書かれた<strong>確認コード</strong>を下に入力してください。
             </p>
-            <Field label="6桁のコード" hint="メールが届かないときは、迷惑メールのフォルダもご確認ください。">
+            <Field label="確認コード" hint="メールが届かないときは、迷惑メールのフォルダもご確認ください。">
               <input id="login-code" inputMode="numeric" autoComplete="one-time-code" maxLength={10} value={code} onChange={(e) => setCode(e.target.value)} className="short" />
             </Field>
             <div className="row">

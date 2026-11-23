@@ -163,7 +163,7 @@ export class LiveStore extends BaseStore implements DataStore {
 
     if (code) {
       const { error } = await this.client.auth.exchangeCodeForSession(code);
-      if (error) this.authError = "ログイン用のリンクを確認できませんでした。メールを送ったときと同じブラウザで開くか、メールに書かれた6桁のコードを入力してください。";
+      if (error) this.authError = "ログイン用のリンクを確認できませんでした。メールを送ったときと同じブラウザで開くか、メールに書かれた確認コードを入力してください。";
     }
     const { data } = await this.client.auth.getSession();
     if (linkError) this.authError = explainLinkError(linkError);
@@ -181,7 +181,7 @@ export class LiveStore extends BaseStore implements DataStore {
     return true;
   }
 
-  /** ログイン用のメール（リンクと6桁のコード）を送る */
+  /** ログイン用のメール（リンクと確認コード）を送る */
   async requestLogin(email: string) {
     const { error } = await this.client.auth.signInWithOtp({
       email: email.trim().toLowerCase(),
@@ -195,7 +195,7 @@ export class LiveStore extends BaseStore implements DataStore {
     }
   }
 
-  /** メールに書かれた6桁のコードでログインする */
+  /** メールに書かれた確認コードでログインする */
   async verifyCode(email: string, code: string) {
     const { error } = await this.client.auth.verifyOtp({ email: email.trim().toLowerCase(), token: code.trim(), type: "email" });
     if (error) throw new Error("コードが正しくないか、有効期限が切れています。もう一度メールを送ってください。");
