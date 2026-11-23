@@ -261,6 +261,8 @@ export function usePhotoUrl(path: string | null): string | null {
 /** 保存時のエラーを、画面に出せる日本語にする */
 export function toMessage(e: unknown): string {
   const msg = e instanceof Error ? e.message : typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : String(e);
+  if (/permission denied for (table|schema|function|sequence)/i.test(msg))
+    return `データベースの読み書きの許可が設定されていません。大会事務局にご連絡ください。（詳細：${msg}）`;
   if (/row-level security|permission denied|violates row-level/i.test(msg))
     return "保存できませんでした。締切を過ぎているか、この操作を行う権限がありません。";
   if (/Failed to fetch|NetworkError|network/i.test(msg)) return "通信できませんでした。電波の良い場所で、もう一度お試しください。";

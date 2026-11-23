@@ -161,6 +161,6 @@ select test.expect_count('ロック解除中は名簿を直せる', $q$select 1 
 reset role;
 set role anon;
 select set_config('request.jwt.claims', '', false);
-select test.expect_count('何も見えない（チーム）', $q$select 1 from public.teams$q$, 0);
+select test.expect_fail('チームの表を読む（表の読み取り自体が拒否される）', $q$select 1 from public.teams$q$);
 reset role;
 \echo 'すべてのテストに合格しました'
