@@ -124,6 +124,13 @@ function jstDate(iso: string) {
   return new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10);
 }
 
+/** メールのリンクのエラーを日本語にする */
+function explainLinkError(msg: string): string {
+  if (/expired|invalid/i.test(msg))
+    return "ログイン用のリンクの有効期限が切れているか、すでに使われています。もう一度「ログイン用のメールを送る」を押して、新しいメールのリンクを開いてください。";
+  return `ログインできませんでした（${msg}）。もう一度お試しください。`;
+}
+
 function fail(error: { message: string } | null): void {
   if (error) throw new Error(error.message);
 }
@@ -144,14 +151,29 @@ export class LiveStore extends BaseStore implements DataStore {
   // ---- ログイン ----
 
   /** 起動時：ログイン済みなら読み込む。戻り値はログインしているか */
+  /** メールのリンクから戻ってきたときのエラー（画面に表示する） */
+  authError: string | null = null;
+
   async init(): Promise<boolean> {
+    // メールのリンクから戻ってきたときの情報（#access_token=… または #error=…、?code=…）
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const query = new URLSearchParams(window.location.search);
+    const linkError = hash.get("error_description") || query.get("error_description");
+    const code = query.get("code");
+
+    if (code) {
+      const { error } = await this.client.auth.exchangeCodeForSession(code);
+      if (error) this.authError = "ログイン用のリンクを確認できませんでした。メールを送ったときと同じブラウザで開くか、メールに書かれた6桁のコードを入力してください。";
+    }
     const { data } = await this.client.auth.getSession();
-    // メールのリンクから戻ってきたとき、URL に残ったログイン情報を消す
-    if (/access_token=|error_description=/.test(window.location.hash)) {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
+    if (linkError) this.authError = explainLinkError(linkError);
+    // URL に残ったログイン情報を消す
+    if (hash.has("access_token") || hash.has("error") || linkError || code) {
+      history.replaceState(null, "", window.location.pathname);
     }
     this.ready = true;
     if (!data.session) {
+      if (!this.authError && hash.has("access_token")) this.authError = "ログイン情報を保存できませんでした。もう一度お試しください。";
       this.emit();
       return false;
     }

@@ -10,7 +10,7 @@ export function Login({ store }: { store: LiveStore }) {
   const [sent, setSent] = useState(false);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(store.authError);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
